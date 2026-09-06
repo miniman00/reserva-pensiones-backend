@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.idea
+.vscode
+*.iml
+*.log
+
+target
+uploads
+
+# Ninguna configuracion local o de produccion debe formar parte de la imagen.
+.env
+.env.*
+# Artefactos locales que no intervienen en el build.
+*.patch
+*.zip

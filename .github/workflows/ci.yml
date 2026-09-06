@@ -1,0 +1,80 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-migrate-start:
+    name: Test, migrate and startup smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: pensions_ci
+          POSTGRES_USER: pensions
+          POSTGRES_PASSWORD: pensions
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pensions -d pensions_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CI_DB_URL: jdbc:postgresql://127.0.0.1:5432/pensions_ci
+      CI_DB_USER: pensions
+      CI_DB_PASSWORD: pensions
+      CI_MEDIA_ROOT: ${{ github.workspace }}/target/ci-media
+      SPRING_PROFILES_ACTIVE: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Unit and integration tests
+        run: mvn -B -ntp verify
+
+      - name: Start application against fresh PostgreSQL
+        run: bash scripts/ci-startup-smoke.sh
+
+      - name: Upload backend diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-ci-diagnostics-${{ github.sha }}
+          path: |
+            target/ci-app.log
+            target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload application JAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pensions-api-${{ github.sha }}
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7

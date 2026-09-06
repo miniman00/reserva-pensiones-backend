@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/pensions}
+    username: ${DB_USER:pensions}
+    password: ${DB_PASSWORD:pensions}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc.time_zone: UTC
+  servlet:
+    multipart:
+      max-file-size: ${MAX_MEDIA_FILE_SIZE:25MB}
+      max-request-size: ${MAX_MEDIA_REQUEST_SIZE:30MB}
+  mail:
+    host: ${SPRING_MAIL_HOST:${MAIL_HOST:smtp.gmail.com}}
+    port: ${SPRING_MAIL_PORT:${MAIL_PORT:587}}
+    username: ${SPRING_MAIL_USERNAME:${MAIL_USERNAME:}}
+    password: ${SPRING_MAIL_PASSWORD:${MAIL_PASSWORD:}}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.starttls.required: true
+      mail.debug: ${MAIL_DEBUG:false}
+
+app:
+  frontend-url: ${APP_FRONTEND_URL:http://localhost:5173}
+  cors:
+    allowed-origins: http://localhost:5173,http://localhost:5175
+  media-root: ./uploads
+  invites:
+    ttl-days: 14

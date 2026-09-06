@@ -1,0 +1,159 @@
+spring:
+  application:
+    name: pensions-api
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    locations: classpath:db/migration
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    baseline-version: 0
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID:changeme}
+            client-secret: ${GOOGLE_CLIENT_SECRET:changeme}
+            scope: openid, profile, email
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          google:
+            issuer-uri: https://accounts.google.com
+
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: framework
+  compression:
+    enabled: ${SERVER_COMPRESSION_ENABLED:true}
+    min-response-size: ${SERVER_COMPRESSION_MIN_RESPONSE_SIZE:2KB}
+    mime-types: application/json,text/html,text/plain,text/css,text/javascript,application/javascript
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,ping
+        readiness:
+          include: readinessState,db,mediaStorage
+  health:
+    # El envío puede usar SMTP o Brevo HTTP. El indicador SMTP de Actuator
+    # no representa la salud real cuando APP_MAIL_PROVIDER=brevo.
+    mail:
+      enabled: false
+
+app:
+  frontend-url: ${APP_FRONTEND_URL:http://localhost:5173}
+  legal:
+    operator-name: ${LEGAL_OPERATOR_NAME:CodeVaru}
+    contact-email: ${LEGAL_CONTACT_EMAIL:soporte@codevaru.com}
+  media-security:
+    max-files-per-request: ${APP_MEDIA_MAX_FILES_PER_REQUEST:10}
+    max-image-bytes: ${APP_MEDIA_MAX_IMAGE_BYTES:12582912}
+    max-video-bytes: ${APP_MEDIA_MAX_VIDEO_BYTES:26214400}
+    max-image-width: ${APP_MEDIA_MAX_IMAGE_WIDTH:10000}
+    max-image-height: ${APP_MEDIA_MAX_IMAGE_HEIGHT:10000}
+    max-image-pixels: ${APP_MEDIA_MAX_IMAGE_PIXELS:24000000}
+  observability:
+    slow-request-threshold-ms: ${APP_OBSERVABILITY_SLOW_REQUEST_THRESHOLD_MS:1500}
+    client-events-enabled: ${APP_OBSERVABILITY_CLIENT_EVENTS_ENABLED:true}
+  public-traffic:
+    max-search-query-length: ${APP_PUBLIC_MAX_SEARCH_QUERY_LENGTH:4096}
+    query-timeout-ms: ${APP_PUBLIC_QUERY_TIMEOUT_MS:5000}
+    rate-limit:
+      search-max: ${APP_PUBLIC_RATE_SEARCH_MAX:120}
+      map-max: ${APP_PUBLIC_RATE_MAP_MAX:60}
+      detail-max: ${APP_PUBLIC_RATE_DETAIL_MAX:90}
+      catalog-max: ${APP_PUBLIC_RATE_CATALOG_MAX:180}
+      favorite-max: ${APP_PUBLIC_RATE_FAVORITE_MAX:120}
+      media-max: ${APP_PUBLIC_RATE_MEDIA_MAX:1200}
+      telemetry-ip-max: ${APP_PUBLIC_RATE_TELEMETRY_IP_MAX:600}
+      telemetry-visitor-max: ${APP_PUBLIC_RATE_TELEMETRY_VISITOR_MAX:300}
+      window: ${APP_PUBLIC_RATE_WINDOW:PT5M}
+
+  inquiries:
+    max-payload-bytes: ${INQUIRY_MAX_PAYLOAD_BYTES:16384}
+    duplicate-window: ${INQUIRY_DUPLICATE_WINDOW:PT5M}
+    rate-limit:
+      client-max: ${INQUIRY_RATE_CLIENT_MAX:10}
+      client-window: ${INQUIRY_RATE_CLIENT_WINDOW:PT10M}
+      pension-max: ${INQUIRY_RATE_PENSION_MAX:3}
+      pension-window: ${INQUIRY_RATE_PENSION_WINDOW:PT30M}
+      ip-max: ${INQUIRY_RATE_IP_MAX:30}
+      ip-pension-max: ${INQUIRY_RATE_IP_PENSION_MAX:10}
+  backoffice:
+    super-admin:
+      username: ${APP_BACKOFFICE_SUPER_ADMIN_USERNAME:soporte}
+      password-hash: ${APP_BACKOFFICE_SUPER_ADMIN_PASSWORD_HASH:$2a$12$A1/e3wVSEU6BC6LL/EcgyuxaAzqt2ozVmcNogFHfdwzd1LPGurrxi}
+      required: ${APP_BACKOFFICE_SUPER_ADMIN_REQUIRED:false}
+      display-name: ${APP_BACKOFFICE_SUPER_ADMIN_DISPLAY_NAME:Soporte}
+      email: ${APP_BACKOFFICE_SUPER_ADMIN_EMAIL:soporte@codevaru.com}
+    session:
+      ttl: ${APP_BACKOFFICE_SESSION_TTL:PT8H}
+      idle-timeout: ${APP_BACKOFFICE_SESSION_IDLE_TIMEOUT:PT30M}
+      cookie-name: ${APP_BACKOFFICE_SESSION_COOKIE_NAME:PENSIONES_BACKOFFICE_SESSION}
+      cookie-path: ${APP_BACKOFFICE_SESSION_COOKIE_PATH:/api}
+      cookie-secure: ${APP_BACKOFFICE_SESSION_COOKIE_SECURE:false}
+      cookie-same-site: ${APP_BACKOFFICE_SESSION_COOKIE_SAME_SITE:Strict}
+    reauthentication:
+      ttl: ${APP_BACKOFFICE_REAUTH_TTL:PT10M}
+    mfa:
+      enabled: ${APP_BACKOFFICE_MFA_ENABLED:false}
+      issuer: ${APP_BACKOFFICE_MFA_ISSUER:Pensiones Backoffice}
+      master-key: ${APP_BACKOFFICE_MFA_MASTER_KEY:}
+      break-glass:
+        enabled: ${APP_BACKOFFICE_MFA_BREAK_GLASS_ENABLED:false}
+        token-hash: ${APP_BACKOFFICE_MFA_BREAK_GLASS_TOKEN_HASH:}
+        expires-at: ${APP_BACKOFFICE_MFA_BREAK_GLASS_EXPIRES_AT:}
+    login-rate-limit:
+      ip-max-attempts: ${APP_BACKOFFICE_LOGIN_IP_MAX_ATTEMPTS:30}
+      ip-window: ${APP_BACKOFFICE_LOGIN_IP_WINDOW:PT10M}
+      username-max-attempts: ${APP_BACKOFFICE_LOGIN_USERNAME_MAX_ATTEMPTS:10}
+      username-window: ${APP_BACKOFFICE_LOGIN_USERNAME_WINDOW:PT15M}
+  founder-benefit-notifications:
+    # Se evalúa cada hora; la deduplicación en BD garantiza un único aviso por hito y vencimiento.
+    cron: ${APP_FOUNDER_BENEFIT_NOTIFICATIONS_CRON:0 10 * * * *}
+    zone: ${APP_FOUNDER_BENEFIT_NOTIFICATIONS_ZONE:America/Montevideo}
+  monetization:
+    enabled: ${APP_MONETIZATION_ENABLED:true}
+  payments:
+    # Kill switch de infraestructura. La habilitación operativa y los proveedores viven en BD/Backoffice.
+    allowed: ${APP_PAYMENTS_ALLOWED:true}
+    # Base64 de 32 bytes. Solo cifra/descifra secretos almacenados en BD; nunca se expone al Backoffice.
+    secrets-master-key: ${APP_PAYMENT_SECRETS_MASTER_KEY:McMq7L9sQpecfkQ25H2rG4EIDhAZdz7juV/qsv8Xjvk=}
+  reports:
+    rate-limit:
+      max: ${REPORT_RATE_MAX:5}
+      window: ${REPORT_RATE_WINDOW:PT1H}
+  mail:
+    enabled: ${APP_MAIL_ENABLED:false}
+    provider: ${APP_MAIL_PROVIDER:smtp}
+    from: ${APP_MAIL_FROM:${SPRING_MAIL_USERNAME:${MAIL_USERNAME:no-reply@codevaru.com}}}
+    brevo:
+      api-key: ${APP_BREVO_API_KEY:}
+      endpoint: ${APP_BREVO_ENDPOINT:https://api.brevo.com/v3/smtp/email}
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5175}
+
+logging:
+  pattern:
+    level: "%5p [rid:%X{requestId:-}]"
+  level:
+    root: INFO
+    org.springframework.security: INFO
+    org.hibernate.SQL: INFO

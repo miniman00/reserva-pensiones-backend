@@ -1,0 +1,47 @@
+spring:
+  datasource:
+    url: ${CI_DB_URL:jdbc:postgresql://localhost:5432/pensions_ci}
+    username: ${CI_DB_USER:pensions}
+    password: ${CI_DB_PASSWORD:pensions}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc.time_zone: UTC
+    open-in-view: false
+  mail:
+    host: localhost
+    port: 2525
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+server:
+  port: ${CI_PORT:18080}
+  servlet:
+    session:
+      cookie:
+        secure: false
+        same-site: lax
+
+app:
+  frontend-url: http://127.0.0.1:5173
+  media-root: ${CI_MEDIA_ROOT:./target/ci-media}
+  media-storage:
+    provider: local
+  mail:
+    enabled: false
+  monetization:
+    enabled: false
+  payments:
+    allowed: false
+  backoffice:
+    super-admin:
+      required: false
+    mfa:
+      enabled: false
+  cors:
+    allowed-origins: http://127.0.0.1:5173

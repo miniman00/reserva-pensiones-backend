@@ -1,0 +1,91 @@
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc.time_zone: UTC
+    open-in-view: false
+  mail:
+    # Solo se utiliza cuando APP_MAIL_PROVIDER=smtp. En producción con Brevo
+    # estas variables pueden quedar vacías. Se conservan fallbacks MAIL_* por
+    # compatibilidad con la configuración anterior de Pensiones.
+    host: ${SPRING_MAIL_HOST:${MAIL_HOST:}}
+    port: ${SPRING_MAIL_PORT:${MAIL_PORT:587}}
+    username: ${SPRING_MAIL_USERNAME:${MAIL_USERNAME:}}
+    password: ${SPRING_MAIL_PASSWORD:${MAIL_PASSWORD:}}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.starttls.required: true
+      mail.smtp.connectiontimeout: ${MAIL_CONNECTION_TIMEOUT_MS:10000}
+      mail.smtp.timeout: ${MAIL_TIMEOUT_MS:10000}
+      mail.smtp.writetimeout: ${MAIL_WRITE_TIMEOUT_MS:10000}
+      mail.debug: false
+  servlet:
+    multipart:
+      max-file-size: ${MAX_MEDIA_FILE_SIZE:25MB}
+      max-request-size: ${MAX_MEDIA_REQUEST_SIZE:30MB}
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:20s}
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:4}
+      shutdown:
+        await-termination: true
+        await-termination-period: ${SCHEDULER_SHUTDOWN_TIMEOUT:20s}
+
+server:
+  shutdown: graceful
+  servlet:
+    session:
+      timeout: ${SESSION_TIMEOUT:12h}
+      cookie:
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:true}
+        same-site: ${SESSION_COOKIE_SAME_SITE:lax}
+
+app:
+  frontend-url: ${APP_FRONTEND_URL}
+  media-root: ${MEDIA_ROOT}
+  backoffice:
+    super-admin:
+      required: ${APP_BACKOFFICE_SUPER_ADMIN_REQUIRED:true}
+    session:
+      ttl: ${APP_BACKOFFICE_SESSION_TTL:PT8H}
+      idle-timeout: ${APP_BACKOFFICE_SESSION_IDLE_TIMEOUT:PT30M}
+      cookie-secure: ${APP_BACKOFFICE_SESSION_COOKIE_SECURE:true}
+      cookie-same-site: ${APP_BACKOFFICE_SESSION_COOKIE_SAME_SITE:Strict}
+    reauthentication:
+      ttl: ${APP_BACKOFFICE_REAUTH_TTL:PT10M}
+    mfa:
+      enabled: ${APP_BACKOFFICE_MFA_ENABLED:true}
+      issuer: ${APP_BACKOFFICE_MFA_ISSUER:Pensiones Backoffice}
+      master-key: ${APP_BACKOFFICE_MFA_MASTER_KEY:}
+      break-glass:
+        enabled: ${APP_BACKOFFICE_MFA_BREAK_GLASS_ENABLED:false}
+        token-hash: ${APP_BACKOFFICE_MFA_BREAK_GLASS_TOKEN_HASH:}
+        expires-at: ${APP_BACKOFFICE_MFA_BREAK_GLASS_EXPIRES_AT:}
+  invites:
+    ttl-days: ${INVITE_TTL_DAYS:14}
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:${APP_FRONTEND_URL}}
+
+logging:
+  level:
+    root: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN

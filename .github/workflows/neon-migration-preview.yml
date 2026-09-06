@@ -1,0 +1,73 @@
+name: Neon migration preview
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-migration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-neon-upgrade:
+    name: Validate Flyway on temporary Neon branch
+    if: >-
+      ${{
+        vars.NEON_CI_ENABLED == 'true' &&
+        (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEON_DATABASE: ${{ vars.NEON_DATABASE || 'neondb' }}
+      NEON_ROLE: ${{ vars.NEON_ROLE || 'neondb_owner' }}
+      CI_MEDIA_ROOT: ${{ github.workspace }}/target/ci-media-neon
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Calculate temporary branch expiration
+        run: echo "NEON_EXPIRES_AT=$(date -u --date '+1 day' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      - name: Create temporary Neon branch
+        id: neon
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch_name: ci-pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_id }}
+          database: ${{ env.NEON_DATABASE }}
+          role: ${{ env.NEON_ROLE }}
+          expires_at: ${{ env.NEON_EXPIRES_AT }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      - name: Package backend
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Run Flyway/JPA startup smoke against Neon branch
+        env:
+          CI_DB_URL: jdbc:postgresql://${{ steps.neon.outputs.db_host }}/${{ env.NEON_DATABASE }}?sslmode=require
+          CI_DB_USER: ${{ env.NEON_ROLE }}
+          CI_DB_PASSWORD: ${{ steps.neon.outputs.password }}
+          SPRING_PROFILES_ACTIVE: ci
+        run: bash scripts/ci-startup-smoke.sh
+
+      - name: Delete temporary Neon branch
+        if: always() && steps.neon.outputs.branch_id != ''
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: ${{ steps.neon.outputs.branch_id }}
+          api_key: ${{ secrets.NEON_API_KEY }}
