@@ -51,7 +51,7 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
     public PaymentCreationResult createPayment(PaymentCreationRequest request) {
         requireRequest(request);
         ProviderSettings settings = settings();
-        String payerEmail = settings.mode() == PaymentProviderMode.LIVE ? request.payerEmail() : firstNonBlank(settings.testPayerEmail(), request.payerEmail());
+        String payerEmail = settings.mode() == PaymentProviderMode.LIVE ? request.payerEmail() : settings.testPayerEmail();
         if (payerEmail == null || payerEmail.isBlank()) throw bad("Mercado Pago requiere email del pagador");
 
         ObjectNode body = objectMapper.createObjectNode();
@@ -75,16 +75,16 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         String successUrl = appendInternalPaymentId(settings.successUrl(), request.metadata());
         String failureUrl = appendInternalPaymentId(settings.failureUrl(), request.metadata());
         String pendingUrl = appendInternalPaymentId(settings.pendingUrl(), request.metadata());
-        if (settings.notificationUrl() != null || successUrl != null || failureUrl != null || pendingUrl != null) {
+        if (successUrl != null || failureUrl != null || pendingUrl != null) {
             ObjectNode config = body.putObject("config");
-            if (settings.notificationUrl() != null) config.put("notification_url", settings.notificationUrl());
-            if (successUrl != null || failureUrl != null || pendingUrl != null) {
-                ObjectNode online = config.putObject("online");
-                if (successUrl != null) online.put("success_url", successUrl);
-                if (failureUrl != null) online.put("failure_url", failureUrl);
-                if (pendingUrl != null) online.put("pending_url", pendingUrl);
-                if (successUrl != null) online.put("auto_return", settings.autoReturn());
-            }
+            // En Checkout Pro via Orders los Webhooks se configuran en Tus integraciones.
+            // notificationUrl se conserva para readiness/certificacion, pero no forma parte
+            // del payload de /v1/orders.
+            ObjectNode online = config.putObject("online");
+            if (successUrl != null) online.put("success_url", successUrl);
+            if (failureUrl != null) online.put("failure_url", failureUrl);
+            if (pendingUrl != null) online.put("pending_url", pendingUrl);
+            if (successUrl != null) online.put("auto_return", settings.autoReturn());
         }
 
         JsonNode response = exchange("POST", "/v1/orders", settings.accessToken(), request.idempotencyKey(), body);
@@ -289,6 +289,12 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
             throw bad("Mercado Pago en LIVE requiere successUrl, failureUrl y pendingUrl HTTPS del Portal");
         }
         String testPayer = text(json, "testPayerEmail");
+        if (config.getMode() != PaymentProviderMode.LIVE) {
+            if (testPayer == null || !testPayer.trim().toLowerCase(Locale.ROOT).endsWith("@testuser.com")) {
+                throw bad("Mercado Pago SANDBOX requiere testPayerEmail de un comprador de prueba terminado en @testuser.com");
+            }
+            testPayer = testPayer.trim();
+        }
         String expiration = firstNonBlank(text(json, "expirationTime"), "P1D");
         if (!expiration.matches("P(?:\\d+D)?(?:T(?:\\d+H)?(?:\\d+M)?)?")) throw bad("expirationTime de Mercado Pago debe ser una duración ISO-8601 simple, por ejemplo P1D");
         String autoReturn = firstNonBlank(text(json, "autoReturn"), "approved");
@@ -319,7 +325,7 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             JsonNode parsed = parseBody(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                String message = firstNonBlank(text(parsed, "message"), text(parsed, "error"), "Mercado Pago respondió HTTP " + response.statusCode());
+                String message = providerErrorMessage(parsed, response.statusCode());
                 throw new ResponseStatusException(response.statusCode() >= 500 ? HttpStatus.BAD_GATEWAY : HttpStatus.CONFLICT,
                         "Mercado Pago: " + trim(message, 300));
             }
@@ -344,7 +350,7 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
             HttpResponse<String> response = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             JsonNode parsed = parseBody(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                String message = firstNonBlank(text(parsed, "message"), text(parsed, "error"), "Mercado Pago respondió HTTP " + response.statusCode());
+                String message = providerErrorMessage(parsed, response.statusCode());
                 throw new ResponseStatusException(response.statusCode() >= 500 ? HttpStatus.BAD_GATEWAY : HttpStatus.CONFLICT,
                         "Mercado Pago: " + trim(message, 300));
             }
@@ -353,6 +359,30 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         catch (java.net.http.HttpTimeoutException e) { throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Mercado Pago no respondió dentro del tiempo esperado"); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "La comunicación con Mercado Pago fue interrumpida"); }
         catch (Exception e) { throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "No se pudo comunicar con Mercado Pago"); }
+    }
+
+
+    private String providerErrorMessage(JsonNode parsed, int statusCode) {
+        String direct = firstNonBlank(text(parsed, "message"), text(parsed, "error"));
+        String code = firstNonBlank(text(parsed, "code"), text(parsed, "error_code"));
+        if (direct != null) return code == null ? direct : code + ": " + direct;
+
+        String nested = firstNestedProviderError(parsed == null ? null : parsed.get("errors"));
+        if (nested == null) nested = firstNestedProviderError(parsed == null ? null : parsed.get("cause"));
+        if (nested != null) return nested;
+
+        return "Mercado Pago respondió HTTP " + statusCode;
+    }
+
+    private String firstNestedProviderError(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        JsonNode candidate = node.isArray() ? (node.isEmpty() ? null : node.get(0)) : node;
+        if (candidate == null || candidate.isNull()) return null;
+        if (candidate.isTextual()) return candidate.asText();
+        String code = firstNonBlank(text(candidate, "code"), text(candidate, "error"));
+        String message = firstNonBlank(text(candidate, "message"), text(candidate, "detail"), text(candidate, "description"));
+        if (code != null && message != null) return code + ": " + message;
+        return firstNonBlank(message, code);
     }
 
     private JsonNode parseBody(String body) {
