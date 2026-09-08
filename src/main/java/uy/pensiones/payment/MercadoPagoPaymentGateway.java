@@ -373,9 +373,15 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
                     .header("Authorization", "Bearer " + accessToken);
             if (idempotencyKey != null && !idempotencyKey.isBlank()) b.header("X-Idempotency-Key", idempotencyKey);
             if ("POST".equals(method)) {
-                b.header("Content-Type", "application/json");
-                if (body == null) b.POST(HttpRequest.BodyPublishers.noBody());
-                else b.POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8));
+                if (body == null) {
+                    // Orders API exige que el reembolso total se envíe realmente sin body.
+                    // No declaramos application/json en ese caso para evitar que Mercado Pago
+                    // intente validar un payload JSON vacío como si fuera un reembolso parcial.
+                    b.POST(HttpRequest.BodyPublishers.noBody());
+                } else {
+                    b.header("Content-Type", "application/json");
+                    b.POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8));
+                }
             } else b.GET();
             HttpResponse<String> response = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             JsonNode parsed = parseBody(response.body());
