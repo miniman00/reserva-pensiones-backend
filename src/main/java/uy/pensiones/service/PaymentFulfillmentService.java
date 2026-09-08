@@ -7,6 +7,7 @@ import uy.pensiones.repo.AdminSubscriptionUserRepository;
 import uy.pensiones.repo.OwnerSubscriptionRepository;
 import uy.pensiones.repo.PensionPromotionRepository;
 import uy.pensiones.repo.PensionRepository;
+import uy.pensiones.repo.SubscriptionFeaturedDayUsageRepository;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -18,17 +19,20 @@ public class PaymentFulfillmentService {
     private final AdminSubscriptionUserRepository users;
     private final PensionPromotionRepository promotions;
     private final PensionRepository pensions;
+    private final SubscriptionFeaturedDayUsageRepository featuredDayUsage;
     private final OwnerTrialLifecycleService trialLifecycle;
 
     public PaymentFulfillmentService(OwnerSubscriptionRepository subscriptions,
                                      AdminSubscriptionUserRepository users,
                                      PensionPromotionRepository promotions,
                                      PensionRepository pensions,
+                                     SubscriptionFeaturedDayUsageRepository featuredDayUsage,
                                      OwnerTrialLifecycleService trialLifecycle) {
         this.subscriptions = subscriptions;
         this.users = users;
         this.promotions = promotions;
         this.pensions = pensions;
+        this.featuredDayUsage = featuredDayUsage;
         this.trialLifecycle = trialLifecycle;
     }
 
@@ -65,9 +69,20 @@ public class PaymentFulfillmentService {
         expireDueForUser(user.getId(), now);
         List<OwnerSubscription> active = subscriptions.findEffectiveActiveDetailed(
                 user.getId(), now, SubscriptionStatus.ACTIVE);
-        if (!active.isEmpty()) {
-            return FulfillmentResult.failure("ACTIVE_SUBSCRIPTION_CONFLICT",
-                    "La cuenta ya tiene otra suscripción efectiva; se requiere conciliación manual antes de aplicar el pago");
+        Long targetPlanId = payment.getPlanVersion().getPlan() == null ? null : payment.getPlanVersion().getPlan().getId();
+        boolean samePlanActive = targetPlanId != null && active.stream()
+                .map(OwnerSubscription::getPlanVersion)
+                .filter(java.util.Objects::nonNull)
+                .map(PlanVersion::getPlan)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(plan -> targetPlanId.equals(plan.getId()));
+        if (samePlanActive) {
+            return FulfillmentResult.failure("ACTIVE_SAME_PLAN_CONFLICT",
+                    "La cuenta ya tiene activo el mismo plan que intentó comprar");
+        }
+        for (OwnerSubscription previous : active) {
+            cancelSubscriptionBenefit(previous, now,
+                    "Sustituida automáticamente por cambio de plan mediante pago #" + payment.getId());
         }
 
         OffsetDateTime startsAt = payment.getApprovedAt() == null ? now : payment.getApprovedAt();
@@ -146,6 +161,44 @@ public class PaymentFulfillmentService {
                 .createdByBackoffice(null)
                 .build());
         return FulfillmentResult.success(null, promotion);
+    }
+
+    /**
+     * Revoca de forma idempotente el beneficio concedido cuando el proveedor confirma
+     * un reembolso total. La trazabilidad queda en el pago y en el motivo de cancelación.
+     */
+    public void revokeAfterFullRefund(PaymentRecord payment, OffsetDateTime now) {
+        OwnerSubscription subscription = payment.getFulfilledSubscription();
+        if (subscription != null) {
+            cancelSubscriptionBenefit(subscription, now,
+                    "Cancelada automáticamente por reembolso total del pago #" + payment.getId());
+        }
+
+        PensionPromotion promotion = payment.getFulfilledPromotion();
+        if (promotion != null && promotion.getStatus() != PensionPromotionStatus.CANCELLED) {
+            promotion.setStatus(PensionPromotionStatus.CANCELLED);
+            promotion.setCancelledAt(now);
+            promotion.setCancellationReason("Cancelada automáticamente por reembolso total del pago #" + payment.getId());
+            promotions.save(promotion);
+        }
+    }
+
+    private void cancelSubscriptionBenefit(OwnerSubscription subscription, OffsetDateTime now, String reason) {
+        if (subscription.getStatus() != SubscriptionStatus.CANCELLED) {
+            subscription.setStatus(SubscriptionStatus.CANCELLED);
+            subscription.setCancelledAt(now);
+            subscription.setCancellationReason(reason);
+            subscriptions.save(subscription);
+        }
+        if (subscription.getId() == null) return;
+        for (SubscriptionFeaturedDayUsage item : featuredDayUsage.findBySubscription_Id(subscription.getId())) {
+            PensionPromotion includedPromotion = item.getPromotion();
+            if (includedPromotion == null || includedPromotion.getStatus() == PensionPromotionStatus.CANCELLED) continue;
+            includedPromotion.setStatus(PensionPromotionStatus.CANCELLED);
+            includedPromotion.setCancelledAt(now);
+            includedPromotion.setCancellationReason(reason);
+            promotions.save(includedPromotion);
+        }
     }
 
     private void expireDueForUser(Long userId, OffsetDateTime now) {

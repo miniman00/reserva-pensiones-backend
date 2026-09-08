@@ -232,10 +232,6 @@ public class PaymentTransactionService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes iniciar una suscripción para otra cuenta");
         }
         if (user.isSuspended()) throw new ResponseStatusException(HttpStatus.CONFLICT, "No se puede iniciar un pago para una cuenta suspendida");
-        if (marketplaceUserId != null && !subscriptions.findEffectiveActiveDetailed(user.getId(), now, SubscriptionStatus.ACTIVE).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Ya tienes una suscripción activa. No se puede iniciar otra compra mientras continúe vigente");
-        }
         int months = input.subscriptionPeriodMonths() == null ? 1 : input.subscriptionPeriodMonths();
         if (months < 1 || months > 12) throw bad("El período de suscripción debe estar entre 1 y 12 meses");
         Long versionId = requireId(input.planVersionId());
@@ -248,6 +244,18 @@ public class PaymentTransactionService {
         PlanVersion version = planVersions.findById(versionId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Versión de plan no encontrada"));
         if (!plan.isActive() || version.getStatus() != PlanVersionStatus.PUBLISHED || version.getEffectiveFrom() == null || now.isBefore(version.getEffectiveFrom()) || (version.getEffectiveUntil() != null && !now.isBefore(version.getEffectiveUntil()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "La versión del plan no está disponible para un nuevo pago");
+        }
+        if (marketplaceUserId != null) {
+            boolean samePlanActive = subscriptions.findEffectiveActiveDetailed(user.getId(), now, SubscriptionStatus.ACTIVE).stream()
+                    .map(OwnerSubscription::getPlanVersion)
+                    .filter(java.util.Objects::nonNull)
+                    .map(PlanVersion::getPlan)
+                    .filter(java.util.Objects::nonNull)
+                    .anyMatch(activePlan -> plan.getId().equals(activePlan.getId()));
+            if (samePlanActive) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Ya tienes este plan activo. Puedes cambiar a otro plan disponible");
+            }
         }
         PlanVersionPeriodPrice periodPrice = (version.getPeriodPrices() == null ? List.<PlanVersionPeriodPrice>of() : version.getPeriodPrices()).stream()
                 .filter(item -> item.getPeriodMonths() == months && item.isEnabled())
@@ -391,18 +399,22 @@ public class PaymentTransactionService {
         }
 
         boolean partialRefund = providerStatus != null && providerStatus.contains("REVIEW_PARTIAL_REFUND");
-        if (p.getFulfilledAt() != null && ((target == PaymentStatus.REFUNDED && (statusChanged || refundIncreased)) || (partialRefund && refundIncreased))) {
+        if (p.getFulfilledAt() != null && target == PaymentStatus.REFUNDED && (statusChanged || refundIncreased)) {
+            OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+            fulfillment.revokeAfterFullRefund(p, now);
+            p.setRefundBenefitDecision(RefundBenefitDecision.REVOKE_BENEFIT);
+            p.setRefundBenefitDecidedAt(now);
+            p.setRefundBenefitDecidedByBackoffice(null);
+            p.setRefundBenefitReason("Revocación automática por reembolso total confirmado por el proveedor");
+            p.setFulfillmentErrorCode(null);
+            p.setFulfillmentErrorMessage(null);
+        } else if (p.getFulfilledAt() != null && partialRefund && refundIncreased) {
             p.setRefundBenefitDecision(null);
             p.setRefundBenefitDecidedAt(null);
             p.setRefundBenefitDecidedByBackoffice(null);
             p.setRefundBenefitReason(null);
-            if (target == PaymentStatus.REFUNDED) {
-                p.setFulfillmentErrorCode("REFUND_REQUIRES_BENEFIT_REVIEW");
-                p.setFulfillmentErrorMessage("El proveedor informa una devolución total; decidí explícitamente si corresponde mantener o revocar el beneficio ya concedido");
-            } else {
-                p.setFulfillmentErrorCode("PARTIAL_REFUND_REQUIRES_REVIEW");
-                p.setFulfillmentErrorMessage("El proveedor informa una devolución parcial; decidí explícitamente el tratamiento del beneficio concedido");
-            }
+            p.setFulfillmentErrorCode("PARTIAL_REFUND_REQUIRES_REVIEW");
+            p.setFulfillmentErrorMessage("El proveedor informa una devolución parcial; decidí explícitamente el tratamiento del beneficio concedido");
         }
 
         if (p.getStatus() == PaymentStatus.APPROVED && p.getFulfilledAt() == null

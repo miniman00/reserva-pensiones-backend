@@ -75,22 +75,71 @@ class PaymentTransactionMarketplaceTest {
     }
 
     @Test
-    void marketplaceSubscriptionIsRejectedBeforePaymentWhenAnotherSubscriptionIsActive() {
+    void marketplaceSubscriptionRejectsBuyingTheSameActivePlan() {
+        OffsetDateTime now = OffsetDateTime.now().minusMinutes(1);
         User owner = User.builder().id(10L).email("owner@example.com").role(UserRole.OWNER).build();
+        Plan plan = Plan.builder().id(2L).code("ESENCIAL").name("Esencial").active(true).build();
+        PlanVersion activeVersion = PlanVersion.builder().id(20L).plan(plan).version(1).build();
+        PlanVersion offeredVersion = PlanVersion.builder().id(22L).plan(plan).version(2)
+                .monthlyPrice(new BigDecimal("390.00")).currency("UYU")
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now).build();
+        OwnerSubscription active = OwnerSubscription.builder().id(99L).user(owner).planVersion(activeVersion)
+                .status(SubscriptionStatus.ACTIVE).startedAt(now.minusDays(1)).expiresAt(now.plusMonths(1)).build();
+
         when(users.findByIdForUpdate(10L)).thenReturn(Optional.of(owner));
+        when(planVersions.findPlanIdByVersionId(22L)).thenReturn(Optional.of(2L));
+        when(plans.findByIdForUpdate(2L)).thenReturn(Optional.of(plan));
+        when(planVersions.findById(22L)).thenReturn(Optional.of(offeredVersion));
         when(subscriptions.findEffectiveActiveDetailed(eq(10L), any(), eq(SubscriptionStatus.ACTIVE)))
-                .thenReturn(List.of(OwnerSubscription.builder().id(99L).user(owner).status(SubscriptionStatus.ACTIVE).build()));
+                .thenReturn(List.of(active));
 
         var input = new PaymentTransactionService.CreateInput(
-                PaymentPurpose.SUBSCRIPTION, 999L, 22L, 1, null, null, null, "portal:10:attempt");
+                PaymentPurpose.SUBSCRIPTION, 999L, 22L, 1, null, null, null, "portal:10:same-plan");
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> service.prepareMarketplace(PaymentProvider.MERCADO_PAGO, input, 10L));
 
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
-        assertTrue(ex.getReason().contains("suscripción activa"));
+        assertTrue(ex.getReason().contains("este plan activo"));
         verify(payments, never()).save(any());
-        verifyNoInteractions(plans, planVersions);
+    }
+
+    @Test
+    void marketplaceSubscriptionAllowsChangingToAnotherPlan() {
+        OffsetDateTime now = OffsetDateTime.now().minusMinutes(1);
+        User owner = User.builder().id(10L).email("owner@example.com").countryCode("UY").role(UserRole.OWNER).build();
+        Plan currentPlan = Plan.builder().id(1L).code("ESENCIAL").name("Esencial").active(true).build();
+        PlanVersion currentVersion = PlanVersion.builder().id(11L).plan(currentPlan).version(1).build();
+        OwnerSubscription active = OwnerSubscription.builder().id(99L).user(owner).planVersion(currentVersion)
+                .status(SubscriptionStatus.ACTIVE).startedAt(now.minusDays(1)).expiresAt(now.plusMonths(1)).build();
+
+        Plan targetPlan = Plan.builder().id(2L).code("PRO").name("Pro").active(true).build();
+        PlanVersion targetVersion = PlanVersion.builder().id(22L).plan(targetPlan).version(1)
+                .monthlyPrice(new BigDecimal("590.00")).currency("UYU")
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now).build();
+        targetVersion.replacePeriodPrices(List.of(
+                PlanVersionPeriodPrice.builder().periodMonths(1).totalPrice(new BigDecimal("590.00")).enabled(true).build()
+        ));
+
+        when(users.findByIdForUpdate(10L)).thenReturn(Optional.of(owner));
+        when(planVersions.findPlanIdByVersionId(22L)).thenReturn(Optional.of(2L));
+        when(plans.findByIdForUpdate(2L)).thenReturn(Optional.of(targetPlan));
+        when(planVersions.findById(22L)).thenReturn(Optional.of(targetVersion));
+        when(subscriptions.findEffectiveActiveDetailed(eq(10L), any(), eq(SubscriptionStatus.ACTIVE)))
+                .thenReturn(List.of(active));
+        when(payments.save(any(PaymentRecord.class))).thenAnswer(invocation -> {
+            PaymentRecord payment = invocation.getArgument(0);
+            payment.setId(77L);
+            return payment;
+        });
+
+        var input = new PaymentTransactionService.CreateInput(
+                PaymentPurpose.SUBSCRIPTION, 10L, 22L, 1, null, null, null, "portal:10:change-plan");
+
+        var prepared = service.prepareMarketplace(PaymentProvider.MERCADO_PAGO, input, 10L);
+
+        assertEquals(77L, prepared.paymentId());
+        assertEquals(new BigDecimal("590.00"), prepared.gatewayRequest().amount());
     }
 
     @Test

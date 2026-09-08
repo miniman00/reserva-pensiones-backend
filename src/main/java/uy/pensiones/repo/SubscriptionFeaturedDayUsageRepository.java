@@ -6,6 +6,7 @@ import org.springframework.data.repository.query.Param;
 import uy.pensiones.model.SubscriptionFeaturedDayUsage;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 public interface SubscriptionFeaturedDayUsageRepository extends JpaRepository<SubscriptionFeaturedDayUsage, Long> {
 
@@ -17,4 +18,6 @@ public interface SubscriptionFeaturedDayUsageRepository extends JpaRepository<Su
             """)
     Long sumDaysForCycle(@Param("subscriptionId") Long subscriptionId,
                          @Param("cycleStart") OffsetDateTime cycleStart);
+
+    List<SubscriptionFeaturedDayUsage> findBySubscription_Id(Long subscriptionId);
 }
