@@ -26,9 +26,17 @@ class MercadoPagoWebhookSignatureTest {
     @BeforeEach
     void setUp() {
         runtime = mock(PaymentRuntimeConfigurationService.class);
+        when(runtime.provider(PaymentProvider.MERCADO_PAGO)).thenReturn(PaymentProviderConfig.builder()
+                .provider(PaymentProvider.MERCADO_PAGO)
+                .mode(PaymentProviderMode.SANDBOX)
+                .configurationJson("{\"testPayerEmail\":\"buyer@testuser.com\"}")
+                .build());
         when(runtime.decryptedCredentials(PaymentProvider.MERCADO_PAGO))
-                .thenReturn(Map.of(MercadoPagoPaymentGateway.ACCESS_TOKEN, "access-token-for-tests",
-                        MercadoPagoPaymentGateway.WEBHOOK_SECRET, SECRET));
+                .thenReturn(Map.of(
+                        MercadoPagoPaymentGateway.SANDBOX_ACCESS_TOKEN, "sandbox-access-token-for-tests",
+                        MercadoPagoPaymentGateway.SANDBOX_WEBHOOK_SECRET, SECRET,
+                        MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN, "live-access-token-for-tests",
+                        MercadoPagoPaymentGateway.LIVE_WEBHOOK_SECRET, SECRET));
         gateway = new MercadoPagoPaymentGateway(runtime, new ObjectMapper());
     }
 

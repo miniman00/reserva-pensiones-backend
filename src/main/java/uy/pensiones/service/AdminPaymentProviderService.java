@@ -150,25 +150,34 @@ public class AdminPaymentProviderService {
         if (input.enabled() && provider == PaymentProvider.MOCK && runtime.isProd()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "El proveedor MOCK está prohibido en producción");
         }
+        PaymentProviderMode mode = input.mode() == null ? PaymentProviderMode.TEST : input.mode();
+        if (provider == PaymentProvider.MOCK && mode != PaymentProviderMode.TEST) throw bad("MOCK solo puede operar en modo TEST");
+        if (provider == PaymentProvider.MERCADO_PAGO && mode == PaymentProviderMode.TEST) {
+            throw bad("Mercado Pago debe operar en modo SANDBOX o LIVE");
+        }
         if (input.enabled() && provider == PaymentProvider.MERCADO_PAGO) {
-            boolean hasAccessToken = credentials.findByProviderAndCredentialName(provider, MercadoPagoPaymentGateway.ACCESS_TOKEN).isPresent();
-            boolean hasWebhookSecret = credentials.findByProviderAndCredentialName(provider, MercadoPagoPaymentGateway.WEBHOOK_SECRET).isPresent();
+            String accessTokenName = MercadoPagoPaymentGateway.accessTokenCredentialName(mode);
+            String webhookSecretName = MercadoPagoPaymentGateway.webhookSecretCredentialName(mode);
+            boolean hasAccessToken = credentials.findByProviderAndCredentialName(provider, accessTokenName).isPresent();
+            boolean hasWebhookSecret = credentials.findByProviderAndCredentialName(provider, webhookSecretName).isPresent();
             if (!hasAccessToken || !hasWebhookSecret) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Mercado Pago requiere ACCESS_TOKEN y WEBHOOK_SECRET antes de habilitarse");
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Mercado Pago en " + mode + " requiere " + accessTokenName + " y " + webhookSecretName + " antes de habilitarse");
             }
             if (!Boolean.TRUE.equals(config.getLastConnectivityCheckSuccess())) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Probá correctamente la conexión con Mercado Pago antes de habilitar el proveedor");
             }
         }
-        PaymentProviderMode mode = input.mode() == null ? PaymentProviderMode.TEST : input.mode();
-        if (provider == PaymentProvider.MOCK && mode != PaymentProviderMode.TEST) throw bad("MOCK solo puede operar en modo TEST");
         if (input.enabled() && !input.subscriptionsEnabled() && !input.promotionsEnabled()) throw bad("Un proveedor habilitado debe aceptar al menos un propósito");
         int priority = input.priority(); if (priority < 1 || priority > 10000) throw bad("La prioridad debe estar entre 1 y 10000");
         String displayName = cleanRequired(input.displayName(), "El nombre", 100);
         String currencies = normalizeCodes(input.supportedCurrencies(), 3, "moneda");
         String countries = normalizeCodes(input.supportedCountries(), 2, "país");
         String configJson = normalizeJson(input.configurationJson());
-        boolean connectivityChanged = config.getMode() != mode || !Objects.equals(config.getConfigurationJson(), configJson);
+        validateMercadoPagoConfiguration(provider, mode, configJson);
+        boolean connectivityChanged = config.getMode() != mode
+                || !Objects.equals(connectivityRelevantJson(provider, config.getMode(), config.getConfigurationJson()),
+                connectivityRelevantJson(provider, mode, configJson));
         if (input.enabled() && provider == PaymentProvider.MERCADO_PAGO && connectivityChanged) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Guardá primero la configuración de Mercado Pago con el proveedor deshabilitado, probá la conexión y luego habilitalo sin cambiar esos datos");
@@ -223,8 +232,11 @@ public class AdminPaymentProviderService {
         credential.setUpdatedByBackoffice(actor);
         credentials.save(credential);
         PaymentProviderConfig providerConfig = providers.findByProviderForUpdate(provider).orElseThrow();
-        providerConfig.setLastConnectivityCheckSuccess(null);
-        providerConfig.setLastConnectivityCheckMessage("Credenciales modificadas; ejecutá nuevamente la prueba de conectividad");
+        if (provider != PaymentProvider.MERCADO_PAGO
+                || MercadoPagoPaymentGateway.credentialAffectsMode(name, providerConfig.getMode())) {
+            providerConfig.setLastConnectivityCheckSuccess(null);
+            providerConfig.setLastConnectivityCheckMessage("Credenciales del modo activo modificadas; ejecutá nuevamente la prueba de conectividad");
+        }
         providers.save(providerConfig);
         audit.record(actor, AdminAuditAction.ADMIN_UPDATE_PAYMENT_PROVIDER_CREDENTIALS,
                 AdminAuditEntityType.PAYMENT_PROVIDER, provider.name(), before, credentialSnapshot(credential), reason);
@@ -241,8 +253,11 @@ public class AdminPaymentProviderService {
         Map<String,Object> before = credentialSnapshot(existing);
         credentials.delete(existing);
         PaymentProviderConfig providerConfig = providers.findByProviderForUpdate(provider).orElseThrow();
-        providerConfig.setLastConnectivityCheckSuccess(null);
-        providerConfig.setLastConnectivityCheckMessage("Credencial eliminada; ejecutá nuevamente la prueba de conectividad");
+        if (provider != PaymentProvider.MERCADO_PAGO
+                || MercadoPagoPaymentGateway.credentialAffectsMode(name, providerConfig.getMode())) {
+            providerConfig.setLastConnectivityCheckSuccess(null);
+            providerConfig.setLastConnectivityCheckMessage("Credencial del modo activo eliminada; ejecutá nuevamente la prueba de conectividad");
+        }
         providers.save(providerConfig);
         audit.record(actor, AdminAuditAction.ADMIN_REMOVE_PAYMENT_PROVIDER_CREDENTIALS,
                 AdminAuditEntityType.PAYMENT_PROVIDER, provider.name(), before,
@@ -350,6 +365,37 @@ public class AdminPaymentProviderService {
     private String normalizeCodes(List<String> values,int len,String label) { if(values==null||values.isEmpty()) return null; LinkedHashSet<String> out=new LinkedHashSet<>(); for(String v:values){if(v==null||v.isBlank())continue;String x=v.trim().toUpperCase(Locale.ROOT);if(x.length()!=len||!x.chars().allMatch(Character::isLetter))throw bad("Código de "+label+" inválido: "+x); if(len==3){try{Currency.getInstance(x);}catch(IllegalArgumentException e){throw bad("Moneda ISO inválida: "+x);}} else if(len==2 && !Set.of(Locale.getISOCountries()).contains(x)){throw bad("País ISO inválido: "+x);} out.add(x);} return out.isEmpty()?null:String.join(",",out); }
     private List<String> split(String value) { return value==null||value.isBlank()?List.of():Arrays.stream(value.split(",")).map(String::trim).filter(x->!x.isEmpty()).toList(); }
     private String normalizeJson(String value) { if(value==null||value.isBlank()) return null; String x=value.trim(); if(x.length()>10000) throw bad("La configuración JSON es demasiado larga"); try { JsonNode node=objectMapper.readTree(x); if(!node.isObject()) throw bad("configurationJson debe ser un objeto JSON"); rejectSecretLikeKeys(node); return objectMapper.writeValueAsString(node);} catch(ResponseStatusException e){throw e;} catch(Exception e){throw bad("configurationJson no contiene JSON válido");} }
+    private void validateMercadoPagoConfiguration(PaymentProvider provider, PaymentProviderMode mode, String configJson) {
+        if (provider != PaymentProvider.MERCADO_PAGO) return;
+        String testPayerEmail = jsonText(configJson, "testPayerEmail");
+        if (mode != PaymentProviderMode.LIVE && testPayerEmail == null) {
+            throw bad("Mercado Pago SANDBOX requiere testPayerEmail de un comprador de prueba");
+        }
+        if (testPayerEmail != null && !testPayerEmail.toLowerCase(Locale.ROOT).endsWith("@testuser.com")) {
+            throw bad("testPayerEmail debe pertenecer a un comprador de prueba de Mercado Pago terminado en @testuser.com");
+        }
+    }
+    private String connectivityRelevantJson(PaymentProvider provider, PaymentProviderMode mode, String configJson) {
+        if (provider != PaymentProvider.MERCADO_PAGO || mode != PaymentProviderMode.LIVE || configJson == null || configJson.isBlank()) {
+            return configJson;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(configJson);
+            if (node.isObject()) ((com.fasterxml.jackson.databind.node.ObjectNode) node).remove("testPayerEmail");
+            return objectMapper.writeValueAsString(node);
+        } catch (Exception e) {
+            return configJson;
+        }
+    }
+    private String jsonText(String configJson, String key) {
+        if (configJson == null || configJson.isBlank()) return null;
+        try {
+            JsonNode value = objectMapper.readTree(configJson).get(key);
+            return value == null || value.isNull() || !value.isTextual() || value.asText().isBlank() ? null : value.asText().trim();
+        } catch (Exception e) {
+            return null;
+        }
+    }
     private void rejectSecretLikeKeys(JsonNode node) {
         if (node == null) return;
         if (node.isObject()) {

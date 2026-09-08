@@ -71,14 +71,21 @@ public class MercadoPagoReadinessService {
         PaymentProviderConfig provider = providers.findById(PaymentProvider.MERCADO_PAGO)
                 .orElseThrow(() -> new IllegalStateException("Falta configuración de MERCADO_PAGO"));
 
-        boolean accessToken = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
-                MercadoPagoPaymentGateway.ACCESS_TOKEN).isPresent();
-        boolean webhookSecret = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
-                MercadoPagoPaymentGateway.WEBHOOK_SECRET).isPresent();
+        boolean sandboxAccessToken = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
+                MercadoPagoPaymentGateway.SANDBOX_ACCESS_TOKEN).isPresent();
+        boolean sandboxWebhookSecret = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
+                MercadoPagoPaymentGateway.SANDBOX_WEBHOOK_SECRET).isPresent();
+        boolean liveAccessToken = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
+                MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN).isPresent();
+        boolean liveWebhookSecret = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
+                MercadoPagoPaymentGateway.LIVE_WEBHOOK_SECRET).isPresent();
         String notificationUrl = configurationText(provider, "notificationUrl");
         String successUrl = configurationText(provider, "successUrl");
         String failureUrl = configurationText(provider, "failureUrl");
         String pendingUrl = configurationText(provider, "pendingUrl");
+        String testPayerEmail = configurationText(provider, "testPayerEmail");
+        boolean validTestPayer = testPayerEmail != null
+                && testPayerEmail.toLowerCase(Locale.ROOT).endsWith("@testuser.com");
 
         long totalCheckoutCount = payments.countByProviderAndProviderCheckoutIdIsNotNull(PaymentProvider.MERCADO_PAGO);
         long totalFulfilledApprovedCount = payments.countByProviderAndStatusAndFulfilledAtIsNotNull(
@@ -104,10 +111,16 @@ public class MercadoPagoReadinessService {
                 "APP_PAYMENTS_ALLOWED debe estar habilitado para aceptar cobros.", "INFRAESTRUCTURA"));
         checks.add(required("SECRETS_STORAGE_READY", "Cifrado de credenciales disponible", crypto.isReady(),
                 "APP_PAYMENT_SECRETS_MASTER_KEY debe estar configurada.", "INFRAESTRUCTURA"));
-        checks.add(required("ACCESS_TOKEN", "ACCESS_TOKEN configurado", accessToken,
-                "Guardá la credencial ACCESS_TOKEN de Mercado Pago.", "MERCADO_PAGO"));
-        checks.add(required("WEBHOOK_SECRET", "WEBHOOK_SECRET configurado", webhookSecret,
-                "Guardá la firma secreta de Webhooks de Mercado Pago.", "MERCADO_PAGO"));
+        checks.add(configuration("SANDBOX_ACCESS_TOKEN", "Access Token SANDBOX configurado", sandboxAccessToken, false,
+                "Guardá SANDBOX_ACCESS_TOKEN para ejecutar pagos de prueba.", "MERCADO_PAGO"));
+        checks.add(configuration("SANDBOX_WEBHOOK_SECRET", "Webhook Secret SANDBOX configurado", sandboxWebhookSecret, false,
+                "Guardá SANDBOX_WEBHOOK_SECRET para validar webhooks de prueba.", "MERCADO_PAGO"));
+        checks.add(configuration("SANDBOX_TEST_PAYER", "Comprador de prueba SANDBOX configurado", validTestPayer, false,
+                "Configurá testPayerEmail con el email @testuser.com de la cuenta Comprador de prueba.", "MERCADO_PAGO"));
+        checks.add(required("LIVE_ACCESS_TOKEN", "Access Token LIVE configurado", liveAccessToken,
+                "Guardá LIVE_ACCESS_TOKEN antes de la salida a producción.", "MERCADO_PAGO"));
+        checks.add(required("LIVE_WEBHOOK_SECRET", "Webhook Secret LIVE configurado", liveWebhookSecret,
+                "Guardá LIVE_WEBHOOK_SECRET antes de la salida a producción.", "MERCADO_PAGO"));
         checks.add(required("CONNECTIVITY", "Prueba de conectividad vigente", Boolean.TRUE.equals(provider.getLastConnectivityCheckSuccess()),
                 provider.getLastConnectivityCheckMessage() == null ? "Ejecutá Probar sobre Mercado Pago después del último cambio de configuración o credenciales." : provider.getLastConnectivityCheckMessage(),
                 "MERCADO_PAGO"));
@@ -181,7 +194,13 @@ public class MercadoPagoReadinessService {
     }
 
     private CheckDTO required(String code, String label, boolean pass, String failureDetail, String category) {
-        return new CheckDTO(code, label, pass ? "PASS" : "FAIL", true,
+        return configuration(code, label, pass, true, failureDetail, category);
+    }
+
+    private CheckDTO configuration(String code, String label, boolean pass, boolean blockingForLive,
+                                   String failureDetail, String category) {
+        String status = pass ? "PASS" : (blockingForLive ? "FAIL" : "WARNING");
+        return new CheckDTO(code, label, status, blockingForLive,
                 pass ? "Correcto." : failureDetail, category);
     }
 

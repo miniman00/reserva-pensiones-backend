@@ -69,9 +69,9 @@ class MercadoPagoReadinessServiceTest {
         when(crypto.isReady()).thenReturn(true);
         when(providers.findById(PaymentProvider.MERCADO_PAGO)).thenReturn(Optional.of(provider));
         PaymentProviderCredential credential = mock(PaymentProviderCredential.class);
-        when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.ACCESS_TOKEN))
+        when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN))
                 .thenReturn(Optional.of(credential));
-        when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.WEBHOOK_SECRET))
+        when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.LIVE_WEBHOOK_SECRET))
                 .thenReturn(Optional.of(credential));
     }
 

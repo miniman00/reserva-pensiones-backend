@@ -34,8 +34,11 @@ import java.util.Map;
 @Component
 public class MercadoPagoPaymentGateway implements PaymentGateway {
     private static final Logger log = LoggerFactory.getLogger(MercadoPagoPaymentGateway.class);
-    public static final String ACCESS_TOKEN = "ACCESS_TOKEN";
-    public static final String WEBHOOK_SECRET = "WEBHOOK_SECRET";
+    /** Credenciales separadas por ambiente. Nunca almacenamos usuario/contraseña de cuentas de prueba. */
+    public static final String SANDBOX_ACCESS_TOKEN = "SANDBOX_ACCESS_TOKEN";
+    public static final String SANDBOX_WEBHOOK_SECRET = "SANDBOX_WEBHOOK_SECRET";
+    public static final String LIVE_ACCESS_TOKEN = "LIVE_ACCESS_TOKEN";
+    public static final String LIVE_WEBHOOK_SECRET = "LIVE_WEBHOOK_SECRET";
     private static final URI API_BASE = URI.create("https://api.mercadopago.com");
 
     private final PaymentRuntimeConfigurationService runtime;
@@ -212,9 +215,28 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
     }
 
     public String webhookSecret() {
-        String value = runtime.decryptedCredentials(PaymentProvider.MERCADO_PAGO).get(WEBHOOK_SECRET);
-        if (value == null || value.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Falta credencial WEBHOOK_SECRET de Mercado Pago");
+        PaymentProviderMode mode = runtime.provider(PaymentProvider.MERCADO_PAGO).getMode();
+        String credentialName = webhookSecretCredentialName(mode);
+        String value = runtime.decryptedCredentials(PaymentProvider.MERCADO_PAGO).get(credentialName);
+        if (value == null || value.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Falta credencial " + credentialName + " de Mercado Pago");
+        }
         return value;
+    }
+
+    public static String accessTokenCredentialName(PaymentProviderMode mode) {
+        return mode == PaymentProviderMode.LIVE ? LIVE_ACCESS_TOKEN : SANDBOX_ACCESS_TOKEN;
+    }
+
+    public static String webhookSecretCredentialName(PaymentProviderMode mode) {
+        return mode == PaymentProviderMode.LIVE ? LIVE_WEBHOOK_SECRET : SANDBOX_WEBHOOK_SECRET;
+    }
+
+    public static boolean credentialAffectsMode(String credentialName, PaymentProviderMode mode) {
+        if (credentialName == null) return false;
+        return credentialName.equals(accessTokenCredentialName(mode))
+                || credentialName.equals(webhookSecretCredentialName(mode));
     }
 
     public boolean verifyWebhookSignature(String dataId, String requestId, String signature, long toleranceMillis) {
@@ -272,9 +294,16 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
 
     private ProviderSettings settings() {
         PaymentProviderConfig config = runtime.provider(PaymentProvider.MERCADO_PAGO);
+        if (config.getMode() == PaymentProviderMode.TEST) {
+            throw bad("Mercado Pago debe operar en modo SANDBOX o LIVE");
+        }
         Map<String, String> credentials = runtime.decryptedCredentials(PaymentProvider.MERCADO_PAGO);
-        String accessToken = credentials.get(ACCESS_TOKEN);
-        if (accessToken == null || accessToken.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Falta credencial ACCESS_TOKEN de Mercado Pago");
+        String accessTokenCredential = accessTokenCredentialName(config.getMode());
+        String accessToken = credentials.get(accessTokenCredential);
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Falta credencial " + accessTokenCredential + " de Mercado Pago");
+        }
         JsonNode json = objectMapper.createObjectNode();
         try {
             if (config.getConfigurationJson() != null && !config.getConfigurationJson().isBlank()) json = objectMapper.readTree(config.getConfigurationJson());
