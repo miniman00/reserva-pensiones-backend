@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -31,6 +33,7 @@ import java.util.Map;
 
 @Component
 public class MercadoPagoPaymentGateway implements PaymentGateway {
+    private static final Logger log = LoggerFactory.getLogger(MercadoPagoPaymentGateway.class);
     public static final String ACCESS_TOKEN = "ACCESS_TOKEN";
     public static final String WEBHOOK_SECRET = "WEBHOOK_SECRET";
     private static final URI API_BASE = URI.create("https://api.mercadopago.com");
@@ -68,9 +71,7 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         ObjectNode item = items.addObject();
         item.put("title", trim(request.description(), 120));
         item.put("quantity", 1);
-        item.put("unit_measure", "unit");
         item.put("unit_price", money(request.amount()));
-        item.put("total_amount", money(request.amount()));
 
         String successUrl = appendInternalPaymentId(settings.successUrl(), request.metadata());
         String failureUrl = appendInternalPaymentId(settings.failureUrl(), request.metadata());
@@ -351,6 +352,9 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
             JsonNode parsed = parseBody(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 String message = providerErrorMessage(parsed, response.statusCode());
+                String providerRequestId = response.headers().firstValue("x-request-id").orElse("-");
+                log.warn("mercado_pago_http_error method={} path={} status={} providerRequestId={} response={}",
+                        method, path, response.statusCode(), providerRequestId, safeProviderErrorBody(parsed));
                 throw new ResponseStatusException(response.statusCode() >= 500 ? HttpStatus.BAD_GATEWAY : HttpStatus.CONFLICT,
                         "Mercado Pago: " + trim(message, 300));
             }
@@ -382,20 +386,48 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
     }
 
     private String firstNestedProviderError(JsonNode node) {
-        if (node == null || node.isNull()) return null;
-        JsonNode candidate = node.isArray() ? (node.isEmpty() ? null : node.get(0)) : node;
-        if (candidate == null || candidate.isNull()) return null;
-        if (candidate.isTextual() || candidate.isNumber() || candidate.isBoolean()) return candidate.asText();
+        return firstNestedProviderError(node, 0);
+    }
 
-        String code = firstNonBlank(text(candidate, "code"), text(candidate, "error"));
-        String field = firstNonBlank(text(candidate, "field"), text(candidate, "property"), text(candidate, "path"));
-        String message = firstNonBlank(text(candidate, "message"), text(candidate, "detail"), text(candidate, "description"));
+    private String firstNestedProviderError(JsonNode node, int depth) {
+        if (node == null || node.isNull() || depth > 6) return null;
+        if (node.isTextual() || node.isNumber() || node.isBoolean()) return node.asText();
+
+        if (node.isArray()) {
+            for (JsonNode candidate : node) {
+                String found = firstNestedProviderError(candidate, depth + 1);
+                if (found != null && !found.isBlank()) return found;
+            }
+            return null;
+        }
+
+        String field = firstNonBlank(text(node, "field"), text(node, "property"), text(node, "path"));
+        String message = firstNonBlank(text(node, "message"), text(node, "detail"), text(node, "description"));
+        String code = firstNonBlank(text(node, "code"), text(node, "error"));
+
+        // Algunas variantes de Orders anidan el nombre de la propiedad rechazada
+        // dentro de otro details/errors/cause. Priorizamos ese dato antes del
+        // mensaje genérico "Properties not supported".
+        String nested = firstNestedProviderError(node.get("details"), depth + 1);
+        if (nested == null) nested = firstNestedProviderError(node.get("errors"), depth + 1);
+        if (nested == null) nested = firstNestedProviderError(node.get("cause"), depth + 1);
+        if (nested != null && !nested.equals(message) && !nested.equals(code)) {
+            if (field != null) return field + ": " + nested;
+            return nested;
+        }
+
         if (field != null && message != null) return field + ": " + message;
         if (code != null && message != null) return code + ": " + message;
         if (field != null) return field;
         if (message != null) return message;
         if (code != null) return code;
-        return candidate.isObject() ? candidate.toString() : null;
+        return null;
+    }
+
+    private String safeProviderErrorBody(JsonNode parsed) {
+        if (parsed == null || parsed.isNull()) return "{}";
+        String raw = parsed.toString().replaceAll("(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}", "<email>");
+        return trim(raw, 1500);
     }
 
     private JsonNode parseBody(String body) {
