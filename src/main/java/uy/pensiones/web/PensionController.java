@@ -197,7 +197,9 @@ public class PensionController {
     @PreAuthorize("@authz.canViewPension(#principal, #id)")
     public PensionPreviewDTO preview(@AuthenticationPrincipal OAuth2User principal,
                                      @PathVariable Long id) {
-        Pension p = repo.findById(id).orElseThrow();
+        // El preview publica senales de confianza del propietario. Cargamos owner/createdBy
+        // en la misma consulta para no depender de proxies LAZY una vez cerrado el repositorio.
+        Pension p = repo.findWithOwnerById(id).orElseThrow();
         return new PensionPreviewDTO(
                 p.getStatus(),
                 publication.report(p),
