@@ -181,12 +181,12 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         return java.util.UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
-    private boolean isRefundAmountPatternError(ResponseStatusException error) {
+    boolean isRefundAmountPatternError(ResponseStatusException error) {
         if (error == null || error.getReason() == null) return false;
         String reason = error.getReason().toLowerCase(Locale.ROOT);
-        return reason.contains("property_value")
-                && reason.contains("refund_amount")
-                && reason.contains("pattern");
+        // Orders puede devolver property_value solo dentro de errors[0]. Si el reason
+        // conserva el detalle, refund_amount + pattern identifica igualmente este caso.
+        return reason.contains("refund_amount") && reason.contains("pattern");
     }
 
     @Override
@@ -482,8 +482,13 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         if (nested == null) nested = firstNestedProviderError(node.get("errors"), depth + 1);
         if (nested == null) nested = firstNestedProviderError(node.get("cause"), depth + 1);
         if (nested != null && !nested.equals(message) && !nested.equals(code)) {
-            if (field != null) return field + ": " + nested;
-            return nested;
+            String header = null;
+            if (field != null && message != null) header = field + ": " + message;
+            else if (code != null && message != null) header = code + ": " + message;
+            else if (field != null) header = field;
+            else if (message != null) header = message;
+            else if (code != null) header = code;
+            return header == null ? nested : header + " | detalle: " + nested;
         }
 
         if (field != null && message != null) return field + ": " + message;

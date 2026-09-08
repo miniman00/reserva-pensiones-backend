@@ -2,6 +2,8 @@ package uy.pensiones.payment;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 
@@ -34,4 +36,12 @@ class MercadoPagoRefundCompatibilityTest {
         assertThat(first).isEqualTo(second);
         assertThat(first.length()).isLessThanOrEqualTo(64);
     }
+    @Test
+    void detectsSandboxRefundAmountPatternEvenWhenProviderCodeWasLostFromReason() {
+        var error = new ResponseStatusException(HttpStatus.CONFLICT,
+                "Mercado Pago: '$.transactions.payments[0].refund_amount' - does not match pattern");
+
+        assertThat(gateway.isRefundAmountPatternError(error)).isTrue();
+    }
+
 }

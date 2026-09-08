@@ -61,4 +61,22 @@ class MercadoPagoProviderErrorMessageTest {
                 .contains("detalle: items.0.total_amount");
     }
 
+    @Test
+    void keepsCodeAndMessageWhenOrdersErrorWrapsTextualDetailInsideErrors() throws Exception {
+        var body = objectMapper.readTree("""
+                {
+                  "errors": [
+                    {
+                      "code": "property_value",
+                      "message": "Invalid value for property",
+                      "details": ["'$.transactions.payments[0].refund_amount' - does not match pattern"]
+                    }
+                  ]
+                }
+                """);
+
+        assertThat(gateway.providerErrorMessage(body, 400))
+                .isEqualTo("property_value: Invalid value for property | detalle: '$.transactions.payments[0].refund_amount' - does not match pattern");
+    }
+
 }
