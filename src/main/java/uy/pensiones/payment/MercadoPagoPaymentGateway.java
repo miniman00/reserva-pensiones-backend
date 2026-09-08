@@ -362,15 +362,22 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
     }
 
 
-    private String providerErrorMessage(JsonNode parsed, int statusCode) {
-        String direct = firstNonBlank(text(parsed, "message"), text(parsed, "error"));
+    String providerErrorMessage(JsonNode parsed, int statusCode) {
         String code = firstNonBlank(text(parsed, "code"), text(parsed, "error_code"));
-        if (direct != null) return code == null ? direct : code + ": " + direct;
+        String direct = firstNonBlank(text(parsed, "message"), text(parsed, "error"));
 
-        String nested = firstNestedProviderError(parsed == null ? null : parsed.get("errors"));
+        // Orders API devuelve el nombre de la propiedad inválida en `details`.
+        // No debemos perder ese dato por priorizar el mensaje genérico superior.
+        String nested = firstNestedProviderError(parsed == null ? null : parsed.get("details"));
+        if (nested == null) nested = firstNestedProviderError(parsed == null ? null : parsed.get("errors"));
         if (nested == null) nested = firstNestedProviderError(parsed == null ? null : parsed.get("cause"));
-        if (nested != null) return nested;
 
+        String header = direct == null ? code : (code == null ? direct : code + ": " + direct);
+        if (nested != null && !nested.equals(header) && !nested.equals(direct) && !nested.equals(code)) {
+            return header == null ? nested : header + " | detalle: " + nested;
+        }
+        if (header != null) return header;
+        if (nested != null) return nested;
         return "Mercado Pago respondió HTTP " + statusCode;
     }
 
@@ -378,11 +385,17 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         if (node == null || node.isNull()) return null;
         JsonNode candidate = node.isArray() ? (node.isEmpty() ? null : node.get(0)) : node;
         if (candidate == null || candidate.isNull()) return null;
-        if (candidate.isTextual()) return candidate.asText();
+        if (candidate.isTextual() || candidate.isNumber() || candidate.isBoolean()) return candidate.asText();
+
         String code = firstNonBlank(text(candidate, "code"), text(candidate, "error"));
+        String field = firstNonBlank(text(candidate, "field"), text(candidate, "property"), text(candidate, "path"));
         String message = firstNonBlank(text(candidate, "message"), text(candidate, "detail"), text(candidate, "description"));
+        if (field != null && message != null) return field + ": " + message;
         if (code != null && message != null) return code + ": " + message;
-        return firstNonBlank(message, code);
+        if (field != null) return field;
+        if (message != null) return message;
+        if (code != null) return code;
+        return candidate.isObject() ? candidate.toString() : null;
     }
 
     private JsonNode parseBody(String body) {
