@@ -115,7 +115,10 @@ public interface PensionRepository extends JpaRepository<Pension, Long> , JpaSpe
         Boolean getPublicVisible();
     }
 
-    @EntityGraph(attributePaths = {"owner", "createdBy"})
+    // LOAD mantiene los atributos EAGER declarados en Pension (amenities, nearbyTags y
+    // studyCenters) y agrega owner/createdBy al grafo. Con FETCH, los atributos no incluidos
+    // en el grafo pasan a tratarse como LAZY y fallan al mapear el preview con OSIV desactivado.
+    @EntityGraph(type = EntityGraph.EntityGraphType.LOAD, attributePaths = {"owner", "createdBy"})
     Optional<Pension> findWithOwnerById(Long id);
 
     @EntityGraph(attributePaths = {"owner", "createdBy"})
