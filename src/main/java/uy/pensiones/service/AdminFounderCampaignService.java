@@ -54,6 +54,7 @@ public class AdminFounderCampaignService {
     private final PlanVersionRepository planVersions;
     private final FounderLaunchCampaignService founderCampaign;
     private final FounderFeaturedBenefitService featuredBenefits;
+    private final OwnerTrialLifecycleService trialLifecycle;
     private final AdminAuditService audit;
     private final ObjectMapper objectMapper;
 
@@ -64,6 +65,7 @@ public class AdminFounderCampaignService {
                                        PlanVersionRepository planVersions,
                                        FounderLaunchCampaignService founderCampaign,
                                        FounderFeaturedBenefitService featuredBenefits,
+                                       OwnerTrialLifecycleService trialLifecycle,
                                        AdminAuditService audit,
                                        ObjectMapper objectMapper) {
         this.campaigns = campaigns;
@@ -73,6 +75,7 @@ public class AdminFounderCampaignService {
         this.planVersions = planVersions;
         this.founderCampaign = founderCampaign;
         this.featuredBenefits = featuredBenefits;
+        this.trialLifecycle = trialLifecycle;
         this.audit = audit;
         this.objectMapper = objectMapper;
     }
@@ -214,6 +217,8 @@ public class AdminFounderCampaignService {
 
         LaunchCampaignBeneficiary beneficiary = beneficiaries.findAdminDetailById(result.beneficiaryId())
                 .orElseThrow(() -> new IllegalStateException("El beneficio Fundador recién creado no pudo recuperarse"));
+        trialLifecycle.consumeByFounderBenefit(
+                beneficiary.getUser(), beneficiary.getSourcePension(), beneficiary.getGrantedAt());
         Map<String, Object> after = beneficiarySnapshot(beneficiary);
         audit.record(actor, AdminAuditAction.ADMIN_GRANT_LAUNCH_CAMPAIGN_BENEFIT,
                 AdminAuditEntityType.LAUNCH_CAMPAIGN_BENEFICIARY, beneficiary.getId(), null, after, reason);
@@ -279,6 +284,10 @@ public class AdminFounderCampaignService {
         beneficiaries.save(beneficiary);
         int extendedPromotions = featuredBenefits.extendForBeneficiary(
                 beneficiary, previousExpiresAt, newExpiresAt, now);
+        // Extending an expired Founder grant restores commercial access and only reactivates
+        // pensions that were paused automatically by the commercial lifecycle.
+        trialLifecycle.consumeByFounderBenefit(
+                beneficiary.getUser(), beneficiary.getSourcePension(), beneficiary.getGrantedAt());
         Map<String, Object> after = beneficiarySnapshot(beneficiary);
         after.put("extendedDays", days);
         after.put("extendedFeaturedPromotions", extendedPromotions);

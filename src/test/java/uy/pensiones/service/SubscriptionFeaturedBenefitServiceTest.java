@@ -117,7 +117,7 @@ class SubscriptionFeaturedBenefitServiceTest {
                                                                  OffsetDateTime expires,
                                                                  int featuredDays) {
         return new OwnerEntitlementService.EntitlementSnapshot(
-                10L, true, true, true, EntitlementSource.SUBSCRIPTION,
+                10L, true, true, true, true, EntitlementSource.SUBSCRIPTION,
                 null, null,
                 new OwnerEntitlementService.EffectivePlan(
                         2L, "PRO", "Pro", 22L, 1,
@@ -125,6 +125,7 @@ class SubscriptionFeaturedBenefitServiceTest {
                         true, true, true, true),
                 new OwnerEntitlementService.EffectiveSubscription(
                         70L, SubscriptionSource.PAYMENT, starts, expires),
+                null,
                 null,
                 new OwnerEntitlementService.UsageSummary(1L, 4, false),
                 List.of(), false

@@ -21,6 +21,33 @@ public interface PensionRepository extends JpaRepository<Pension, Long> , JpaSpe
     List<Pension> findByOwnerId(Long ownerId);
     List<Pension> findByCountryCodeIgnoreCase(String countryCode);
 
+    @EntityGraph(attributePaths = {"owner", "createdBy"})
+    @Query("""
+            select p from Pension p
+            where p.status = 'PUBLISHED'
+              and coalesce(p.owner.id, p.createdBy.id) = :userId
+            order by p.id asc
+            """)
+    List<Pension> findPublishedForResponsibleUser(@Param("userId") Long userId);
+
+    @EntityGraph(attributePaths = {"owner", "createdBy"})
+    @Query("""
+            select p from Pension p
+            where p.status = 'PAUSED'
+              and p.commercialPauseReason = :reason
+              and coalesce(p.owner.id, p.createdBy.id) = :userId
+            order by p.id asc
+            """)
+    List<Pension> findCommerciallyPausedForResponsibleUser(@Param("userId") Long userId,
+                                                            @Param("reason") String reason);
+
+    @Query("""
+            select distinct coalesce(p.owner.id, p.createdBy.id)
+            from Pension p
+            where p.status = 'PUBLISHED'
+            """)
+    List<Long> findDistinctPublishedResponsibleUserIds();
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE pensions SET draft_step = :step WHERE id = :id AND status = 'DRAFT'", nativeQuery = true)
     int updateDraftStep(@Param("id") Long id, @Param("step") String step);

@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.repository.query.Param;
 import uy.pensiones.enums.SubscriptionStatus;
+import uy.pensiones.enums.SubscriptionSource;
 import uy.pensiones.model.OwnerSubscription;
 
 import java.time.OffsetDateTime;
@@ -35,6 +36,8 @@ public interface OwnerSubscriptionRepository extends JpaRepository<OwnerSubscrip
     Optional<Long> findUserIdById(@Param("id") Long id);
 
     List<OwnerSubscription> findByUserIdAndStatusOrderByExpiresAtDesc(Long userId, SubscriptionStatus status);
+
+    boolean existsByUserIdAndSource(Long userId, SubscriptionSource source);
 
     @EntityGraph(attributePaths = {"user", "planVersion", "planVersion.plan"})
     @Query("""

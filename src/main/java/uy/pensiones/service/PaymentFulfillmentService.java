@@ -18,15 +18,18 @@ public class PaymentFulfillmentService {
     private final AdminSubscriptionUserRepository users;
     private final PensionPromotionRepository promotions;
     private final PensionRepository pensions;
+    private final OwnerTrialLifecycleService trialLifecycle;
 
     public PaymentFulfillmentService(OwnerSubscriptionRepository subscriptions,
                                      AdminSubscriptionUserRepository users,
                                      PensionPromotionRepository promotions,
-                                     PensionRepository pensions) {
+                                     PensionRepository pensions,
+                                     OwnerTrialLifecycleService trialLifecycle) {
         this.subscriptions = subscriptions;
         this.users = users;
         this.promotions = promotions;
         this.pensions = pensions;
+        this.trialLifecycle = trialLifecycle;
     }
 
     /**
@@ -78,6 +81,7 @@ public class PaymentFulfillmentService {
                 .providerSubscriptionId(payment.getProviderSubscriptionId())
                 .source(SubscriptionSource.PAYMENT)
                 .build());
+        trialLifecycle.consumeByPaidSubscription(user, startsAt);
         return FulfillmentResult.success(subscription, null);
     }
 

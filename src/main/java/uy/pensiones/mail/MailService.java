@@ -17,6 +17,8 @@ public interface MailService {
 
     void sendFounderBenefitNotice(String to, String displayName, String title, String message, String actionLink);
 
+    void sendOwnerAccessNotice(String to, String displayName, String title, String message, String actionLink);
+
     DeliveryResult sendPaymentOperationalAlert(java.util.List<String> recipients, String severity, String category,
                                                String title, String message, String actionPath, boolean test);
 }

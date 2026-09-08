@@ -2,6 +2,7 @@ package uy.pensiones.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import uy.pensiones.enums.PaymentProvider;
@@ -14,6 +15,10 @@ import uy.pensiones.enums.PromotionTargetType;
 import uy.pensiones.enums.SubscriptionStatus;
 import uy.pensiones.enums.UserRole;
 import uy.pensiones.model.OwnerSubscription;
+import uy.pensiones.model.PaymentRecord;
+import uy.pensiones.model.Plan;
+import uy.pensiones.model.PlanVersion;
+import uy.pensiones.model.PlanVersionPeriodPrice;
 import uy.pensiones.model.PaymentProviderConfig;
 import uy.pensiones.model.Pension;
 import uy.pensiones.model.PromotionProduct;
@@ -116,4 +121,70 @@ class PaymentTransactionMarketplaceTest {
         assertTrue(ex.getReason().contains("solapa"));
         verify(payments, never()).save(any());
     }
+    @Test
+    void subscriptionUsesConfiguredPeriodTotalInsteadOfMultiplyingMonthlyPrice() {
+        OffsetDateTime now = OffsetDateTime.now().minusMinutes(1);
+        User owner = User.builder().id(10L).email("owner@example.com").countryCode("UY").role(UserRole.OWNER).build();
+        Plan plan = Plan.builder().id(2L).code("PRO").name("Pro").active(true).build();
+        PlanVersion version = PlanVersion.builder().id(22L).plan(plan).version(1)
+                .monthlyPrice(new BigDecimal("590.00")).currency("UYU")
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now).build();
+        version.replacePeriodPrices(List.of(
+                PlanVersionPeriodPrice.builder().periodMonths(1).totalPrice(new BigDecimal("590.00")).enabled(true).build(),
+                PlanVersionPeriodPrice.builder().periodMonths(3).totalPrice(new BigDecimal("1590.00")).enabled(true).build(),
+                PlanVersionPeriodPrice.builder().periodMonths(6).totalPrice(new BigDecimal("2890.00")).enabled(false).build()
+        ));
+
+        when(users.findByIdForUpdate(10L)).thenReturn(Optional.of(owner));
+        when(planVersions.findPlanIdByVersionId(22L)).thenReturn(Optional.of(2L));
+        when(plans.findByIdForUpdate(2L)).thenReturn(Optional.of(plan));
+        when(planVersions.findById(22L)).thenReturn(Optional.of(version));
+        when(payments.save(any(PaymentRecord.class))).thenAnswer(invocation -> {
+            PaymentRecord payment = invocation.getArgument(0);
+            payment.setId(77L);
+            return payment;
+        });
+
+        var input = new PaymentTransactionService.CreateInput(
+                PaymentPurpose.SUBSCRIPTION, 10L, 22L, 3, null, null, null, "portal:10:period-3");
+
+        var prepared = service.prepareMarketplace(PaymentProvider.MERCADO_PAGO, input, 10L);
+
+        assertEquals(new BigDecimal("1590.00"), prepared.gatewayRequest().amount());
+        assertEquals(77L, prepared.paymentId());
+        ArgumentCaptor<PaymentRecord> saved = ArgumentCaptor.forClass(PaymentRecord.class);
+        verify(payments).save(saved.capture());
+        assertEquals(3, saved.getValue().getSubscriptionPeriodMonths());
+        assertEquals(new BigDecimal("1590.00"), saved.getValue().getAmount());
+    }
+
+    @Test
+    void subscriptionRejectsDisabledOrUnconfiguredPeriod() {
+        OffsetDateTime now = OffsetDateTime.now().minusMinutes(1);
+        User owner = User.builder().id(10L).email("owner@example.com").countryCode("UY").role(UserRole.OWNER).build();
+        Plan plan = Plan.builder().id(2L).code("PRO").name("Pro").active(true).build();
+        PlanVersion version = PlanVersion.builder().id(22L).plan(plan).version(1)
+                .monthlyPrice(new BigDecimal("590.00")).currency("UYU")
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now).build();
+        version.replacePeriodPrices(List.of(
+                PlanVersionPeriodPrice.builder().periodMonths(1).totalPrice(new BigDecimal("590.00")).enabled(true).build(),
+                PlanVersionPeriodPrice.builder().periodMonths(6).totalPrice(new BigDecimal("2890.00")).enabled(false).build()
+        ));
+
+        when(users.findByIdForUpdate(10L)).thenReturn(Optional.of(owner));
+        when(planVersions.findPlanIdByVersionId(22L)).thenReturn(Optional.of(2L));
+        when(plans.findByIdForUpdate(2L)).thenReturn(Optional.of(plan));
+        when(planVersions.findById(22L)).thenReturn(Optional.of(version));
+
+        var input = new PaymentTransactionService.CreateInput(
+                PaymentPurpose.SUBSCRIPTION, 10L, 22L, 6, null, null, null, "portal:10:period-6");
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service.prepareMarketplace(PaymentProvider.MERCADO_PAGO, input, 10L));
+
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("período seleccionado"));
+        verify(payments, never()).save(any());
+    }
+
 }

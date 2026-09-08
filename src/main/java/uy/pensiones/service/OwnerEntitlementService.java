@@ -9,6 +9,8 @@ import uy.pensiones.enums.EntitlementSource;
 import uy.pensiones.enums.UserRole;
 import uy.pensiones.model.LaunchCampaignBeneficiary;
 import uy.pensiones.model.OwnerSubscription;
+import uy.pensiones.model.OwnerTrialLifecycle;
+import uy.pensiones.model.OwnerTrialSettings;
 import uy.pensiones.model.Plan;
 import uy.pensiones.model.PlanVersion;
 import uy.pensiones.model.User;
@@ -36,6 +38,7 @@ public class OwnerEntitlementService {
     private final OwnerEntitlementQueryRepository usage;
     private final OwnerEntitlementUserLockRepository userLocks;
     private final PensionRepository pensions;
+    private final OwnerTrialLifecycleService trialLifecycle;
 
     public OwnerEntitlementService(AppProperties properties,
                                    UserRepository users,
@@ -44,7 +47,8 @@ public class OwnerEntitlementService {
                                    PlanVersionRepository planVersions,
                                    OwnerEntitlementQueryRepository usage,
                                    OwnerEntitlementUserLockRepository userLocks,
-                                   PensionRepository pensions) {
+                                   PensionRepository pensions,
+                                   OwnerTrialLifecycleService trialLifecycle) {
         this.properties = properties;
         this.users = users;
         this.subscriptions = subscriptions;
@@ -53,6 +57,7 @@ public class OwnerEntitlementService {
         this.usage = usage;
         this.userLocks = userLocks;
         this.pensions = pensions;
+        this.trialLifecycle = trialLifecycle;
     }
 
     @Transactional(readOnly = true)
@@ -73,6 +78,23 @@ public class OwnerEntitlementService {
         long current = usage.countResponsiblePensions(user.getId());
         requireCapacity("MAX_PENSIONS", policy.maxPensions(), current, 1,
                 "Alcanzaste el máximo de pensiones permitido por tu plan.");
+    }
+
+    /** Publication is allowed during pending/active trial, grace, Founder benefit or paid subscription. */
+    @Transactional(readOnly = true)
+    public void requirePublicationAccess(Long userId) {
+        if (!properties.getMonetization().isEnabled()) return;
+        Long id = requireId(userId);
+        User user = requireMarketplaceUser(users.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado")));
+        Resolution resolution = resolvePolicy(user, OffsetDateTime.now(ZoneOffset.UTC));
+        if (resolution.issueCode() != null) {
+            throw new MonetizationConfigurationException(resolution.issueCode(), resolution.issueMessage());
+        }
+        if (!resolution.accessActive()) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "Tu período gratuito ya finalizó. Contrata un plan para publicar o reactivar tus pensiones.");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -100,6 +122,10 @@ public class OwnerEntitlementService {
         EntitlementSnapshot snapshot = resolve(userId);
         if (!snapshot.configurationReady()) {
             throw new MonetizationConfigurationException(snapshot.issueCode(), snapshot.issueMessage());
+        }
+        if (!snapshot.accessActive()) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "Tu acceso como propietario finalizó. Contrata un plan para continuar.");
         }
         if (snapshot.plan() == null || !enabled.test(snapshot.plan())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, message);
@@ -180,8 +206,8 @@ public class OwnerEntitlementService {
         if (!properties.getMonetization().isEnabled()) {
             UsageSummary usageSummary = usageSummary(responsiblePensions, null);
             return new EntitlementSnapshot(
-                    user.getId(), false, false, true, EntitlementSource.BYPASS,
-                    null, null, null, null, null, usageSummary,
+                    user.getId(), false, false, true, true, EntitlementSource.BYPASS,
+                    null, null, null, null, null, null, usageSummary,
                     pensionUsage(rows, null), responsiblePensions > rows.size()
             );
         }
@@ -190,8 +216,8 @@ public class OwnerEntitlementService {
         if (resolution.issueCode() != null) {
             UsageSummary usageSummary = usageSummary(responsiblePensions, null);
             return new EntitlementSnapshot(
-                    user.getId(), true, true, false, EntitlementSource.MISCONFIGURED,
-                    resolution.issueCode(), resolution.issueMessage(), null, null, null, usageSummary,
+                    user.getId(), true, true, false, false, EntitlementSource.MISCONFIGURED,
+                    resolution.issueCode(), resolution.issueMessage(), null, null, null, null, usageSummary,
                     pensionUsage(rows, null), responsiblePensions > rows.size()
             );
         }
@@ -199,10 +225,11 @@ public class OwnerEntitlementService {
         EffectivePolicy policy = resolution.policy();
         UsageSummary usageSummary = usageSummary(responsiblePensions, policy);
         return new EntitlementSnapshot(
-                user.getId(), true, true, true, resolution.source(),
-                null, null, planDto(policy), resolution.subscription() == null ? null : subscriptionDto(resolution.subscription()),
+                user.getId(), true, true, true, resolution.accessActive(), resolution.source(),
+                null, null, policy == null ? null : planDto(policy),
+                resolution.subscription() == null ? null : subscriptionDto(resolution.subscription()),
                 resolution.launchBenefit() == null ? null : launchBenefitDto(resolution.launchBenefit()),
-                usageSummary, pensionUsage(rows, policy), responsiblePensions > rows.size()
+                resolution.trialAccess(), usageSummary, pensionUsage(rows, policy), responsiblePensions > rows.size()
         );
     }
 
@@ -210,6 +237,10 @@ public class OwnerEntitlementService {
         Resolution resolution = resolvePolicy(user, now);
         if (resolution.issueCode() != null) {
             throw new MonetizationConfigurationException(resolution.issueCode(), resolution.issueMessage());
+        }
+        if (!resolution.accessActive() || resolution.policy() == null) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "Tu período gratuito ya finalizó. Contrata un plan para continuar usando las funciones de propietario.");
         }
         return resolution.policy();
     }
@@ -242,16 +273,100 @@ public class OwnerEntitlementService {
             return Resolution.launchCampaign(policy(version), launchBenefit);
         }
 
-        List<PlanVersion> freeVersions = planVersions.findEffectiveFreeVersions("FREE", uy.pensiones.enums.PlanVersionStatus.PUBLISHED, now);
-        if (freeVersions.isEmpty()) {
-            return Resolution.issue("FREE_PLAN_NOT_CONFIGURED",
-                    "Monetización está habilitada pero no existe una versión FREE publicada y vigente.");
+        OwnerTrialSettings settings;
+        try {
+            settings = trialLifecycle.settings();
+        } catch (MonetizationConfigurationException ex) {
+            return Resolution.issue(ex.getConfigurationCode(), ex.getMessage());
         }
-        if (freeVersions.size() > 1) {
-            return Resolution.issue("FREE_PLAN_OVERLAP",
-                    "Existe más de una versión FREE vigente. Corrige las vigencias antes de aplicar límites.");
+
+        // Safe rollout: until Backoffice explicitly enables trial enforcement, preserve the old FREE policy.
+        if (!settings.isEnabled()) {
+            List<PlanVersion> freeVersions = planVersions.findEffectiveFreeVersions("FREE", uy.pensiones.enums.PlanVersionStatus.PUBLISHED, now);
+            if (freeVersions.isEmpty()) {
+                return Resolution.issue("FREE_PLAN_NOT_CONFIGURED",
+                        "Monetización está habilitada pero no existe una versión FREE publicada y vigente.");
+            }
+            if (freeVersions.size() > 1) {
+                return Resolution.issue("FREE_PLAN_OVERLAP",
+                        "Existe más de una versión FREE vigente. Corrige las vigencias antes de aplicar límites.");
+            }
+            return Resolution.free(policy(freeVersions.get(0)));
         }
-        return Resolution.free(policy(freeVersions.get(0)));
+
+        PlanVersion configuredTrialPlan = settings.getTrialPlanVersion();
+        if (!usableTrialPlan(configuredTrialPlan, now)) {
+            return Resolution.issue("OWNER_TRIAL_PLAN_NOT_EFFECTIVE",
+                    "La prueba gratuita está habilitada pero su versión de plan no está publicada y vigente.");
+        }
+
+        OwnerTrialLifecycle lifecycle = trialLifecycle.lifecycle(user.getId());
+        if (lifecycle == null) {
+            EffectiveTrialAccess trial = new EffectiveTrialAccess(
+                    "PENDING", true, false, false, false, null, null, null,
+                    settings.getDurationDays(), settings.getGraceDays(), null, null);
+            return Resolution.trial(EntitlementSource.TRIAL_PENDING, policy(configuredTrialPlan), trial);
+        }
+
+        if (lifecycle.getConsumptionReason() == uy.pensiones.enums.OwnerTrialConsumptionReason.TRIAL_STARTED) {
+            EffectiveTrialAccess trial = trialAccess(lifecycle, now);
+            if (lifecycle.getConvertedAt() != null) {
+                return Resolution.expired(trial.withPhase("CONVERTED"));
+            }
+            PlanVersion snapshot = lifecycle.getTrialPlanVersion();
+            if (snapshot == null || snapshot.getPlan() == null) {
+                return Resolution.issue("OWNER_TRIAL_PLAN_SNAPSHOT_MISSING",
+                        "La prueba gratuita consumida no conserva una versión de plan válida.");
+            }
+            if (lifecycle.getTrialExpiresAt() != null && lifecycle.getTrialExpiresAt().isAfter(now)) {
+                return Resolution.trial(EntitlementSource.TRIAL, policy(snapshot), trial.withPhase("ACTIVE"));
+            }
+            if (lifecycle.getGraceExpiresAt() != null && lifecycle.getGraceExpiresAt().isAfter(now)) {
+                return Resolution.trial(EntitlementSource.TRIAL_GRACE, policy(snapshot), trial.withPhase("GRACE"));
+            }
+            return Resolution.expired(trial.withPhase("EXPIRED"));
+        }
+
+        if (lifecycle.getConsumptionReason() == uy.pensiones.enums.OwnerTrialConsumptionReason.FOUNDER_GRANTED) {
+            OwnerTrialLifecycleService.FounderGrace grace = trialLifecycle.founderGrace(user.getId(), now);
+            if (grace.active() && grace.benefit() != null && grace.benefit().getPlanVersion() != null
+                    && grace.benefit().getPlanVersion().getPlan() != null) {
+                EffectiveTrialAccess trial = new EffectiveTrialAccess(
+                        "FOUNDER_GRACE", false, true, false, true, lifecycle.getConsumptionReason().name(),
+                        null, grace.benefit().getExpiresAt(), grace.graceExpiresAt(), null, grace.graceDays(),
+                        lifecycle.getConsumedAt(), lifecycle.getConvertedAt());
+                return Resolution.founderGrace(policy(grace.benefit().getPlanVersion()), grace.benefit(), trial);
+            }
+            EffectiveTrialAccess trial = new EffectiveTrialAccess(
+                    "FOUNDER_EXPIRED", false, true, true, false, lifecycle.getConsumptionReason().name(),
+                    null, null, null, null, lifecycle.getGraceDaysSnapshot(), lifecycle.getConsumedAt(), lifecycle.getConvertedAt());
+            return Resolution.expired(trial);
+        }
+
+        EffectiveTrialAccess paid = new EffectiveTrialAccess(
+                "PAID_BEFORE_TRIAL", false, true, true, false, lifecycle.getConsumptionReason().name(),
+                null, null, null, null, lifecycle.getGraceDaysSnapshot(), lifecycle.getConsumedAt(), lifecycle.getConvertedAt());
+        return Resolution.expired(paid);
+    }
+
+    private EffectiveTrialAccess trialAccess(OwnerTrialLifecycle lifecycle, OffsetDateTime now) {
+        String phase = "EXPIRED";
+        if (lifecycle.getConvertedAt() != null) phase = "CONVERTED";
+        else if (lifecycle.getTrialExpiresAt() != null && lifecycle.getTrialExpiresAt().isAfter(now)) phase = "ACTIVE";
+        else if (lifecycle.getGraceExpiresAt() != null && lifecycle.getGraceExpiresAt().isAfter(now)) phase = "GRACE";
+        return new EffectiveTrialAccess(
+                phase, false, true, "EXPIRED".equals(phase) || "CONVERTED".equals(phase), "GRACE".equals(phase),
+                lifecycle.getConsumptionReason() == null ? null : lifecycle.getConsumptionReason().name(),
+                lifecycle.getTrialStartedAt(), lifecycle.getTrialExpiresAt(), lifecycle.getGraceExpiresAt(),
+                lifecycle.getDurationDaysSnapshot(), lifecycle.getGraceDaysSnapshot(),
+                lifecycle.getConsumedAt(), lifecycle.getConvertedAt());
+    }
+
+    private boolean usableTrialPlan(PlanVersion version, OffsetDateTime now) {
+        if (version == null || version.getPlan() == null || !version.getPlan().isActive()) return false;
+        if (version.getStatus() != uy.pensiones.enums.PlanVersionStatus.PUBLISHED) return false;
+        if (version.getEffectiveFrom() == null || now.isBefore(version.getEffectiveFrom())) return false;
+        return version.getEffectiveUntil() == null || now.isBefore(version.getEffectiveUntil());
     }
 
     private EffectivePolicy policy(PlanVersion version) {
@@ -372,18 +487,28 @@ public class OwnerEntitlementService {
 
     private record Resolution(EntitlementSource source, EffectivePolicy policy,
                               OwnerSubscription subscription, LaunchCampaignBeneficiary launchBenefit,
+                              EffectiveTrialAccess trialAccess, boolean accessActive,
                               String issueCode, String issueMessage) {
         static Resolution subscription(EffectivePolicy policy, OwnerSubscription subscription) {
-            return new Resolution(EntitlementSource.SUBSCRIPTION, policy, subscription, null, null, null);
+            return new Resolution(EntitlementSource.SUBSCRIPTION, policy, subscription, null, null, true, null, null);
         }
         static Resolution launchCampaign(EffectivePolicy policy, LaunchCampaignBeneficiary launchBenefit) {
-            return new Resolution(EntitlementSource.LAUNCH_CAMPAIGN, policy, null, launchBenefit, null, null);
+            return new Resolution(EntitlementSource.LAUNCH_CAMPAIGN, policy, null, launchBenefit, null, true, null, null);
+        }
+        static Resolution founderGrace(EffectivePolicy policy, LaunchCampaignBeneficiary launchBenefit, EffectiveTrialAccess trial) {
+            return new Resolution(EntitlementSource.LAUNCH_CAMPAIGN_GRACE, policy, null, launchBenefit, trial, true, null, null);
+        }
+        static Resolution trial(EntitlementSource source, EffectivePolicy policy, EffectiveTrialAccess trial) {
+            return new Resolution(source, policy, null, null, trial, true, null, null);
         }
         static Resolution free(EffectivePolicy policy) {
-            return new Resolution(EntitlementSource.FREE, policy, null, null, null, null);
+            return new Resolution(EntitlementSource.FREE, policy, null, null, null, true, null, null);
+        }
+        static Resolution expired(EffectiveTrialAccess trial) {
+            return new Resolution(EntitlementSource.ACCESS_EXPIRED, null, null, null, trial, false, null, null);
         }
         static Resolution issue(String code, String message) {
-            return new Resolution(EntitlementSource.MISCONFIGURED, null, null, null, code, message);
+            return new Resolution(EntitlementSource.MISCONFIGURED, null, null, null, null, false, code, message);
         }
     }
 
@@ -392,16 +517,41 @@ public class OwnerEntitlementService {
             boolean monetizationEnabled,
             boolean enforcementEnabled,
             boolean configurationReady,
+            boolean accessActive,
             EntitlementSource source,
             String issueCode,
             String issueMessage,
             EffectivePlan plan,
             EffectiveSubscription subscription,
             EffectiveLaunchCampaignBenefit launchCampaignBenefit,
+            EffectiveTrialAccess trialAccess,
             UsageSummary usage,
             List<PensionUsage> pensions,
             boolean pensionUsageTruncated
     ) {}
+
+    public record EffectiveTrialAccess(
+            String phase,
+            boolean eligible,
+            boolean consumed,
+            boolean expired,
+            boolean inGrace,
+            String consumptionReason,
+            OffsetDateTime startedAt,
+            OffsetDateTime trialExpiresAt,
+            OffsetDateTime graceExpiresAt,
+            Integer durationDays,
+            Integer graceDays,
+            OffsetDateTime consumedAt,
+            OffsetDateTime convertedAt
+    ) {
+        EffectiveTrialAccess withPhase(String value) {
+            return new EffectiveTrialAccess(value, eligible, consumed,
+                    "EXPIRED".equals(value) || "CONVERTED".equals(value),
+                    "GRACE".equals(value) || "FOUNDER_GRACE".equals(value), consumptionReason,
+                    startedAt, trialExpiresAt, graceExpiresAt, durationDays, graceDays, consumedAt, convertedAt);
+        }
+    }
 
     public record EffectivePlan(
             Long planId, String planCode, String planName, Long planVersionId, int planVersion,

@@ -103,8 +103,8 @@ public class FounderBenefitLifecycleService {
             default -> "Tu beneficio Fundador vence en " + visibleDays + " días";
         };
         String message = "Tu beneficio de Propietario Fundador vence el " + expiration
-                + ". Tus pensiones seguirán publicadas gratuitamente; al finalizar dejarán de aplicarse "
-                + "los beneficios premium y los destacados Fundador. Revisa Planes y destacados para conocer tus opciones.";
+                + ". Después comienza el período de gracia comercial. Elige un plan antes de que finalice "
+                + "para mantener tus publicaciones visibles sin interrupciones.";
         String dedupKey = dedupKey(beneficiary, "reminder-" + milestone);
         notifyOnce(beneficiary, owner, NotificationType.FOUNDER_BENEFIT_EXPIRING, title, message, dedupKey);
     }
@@ -112,8 +112,8 @@ public class FounderBenefitLifecycleService {
     private void sendExpired(LaunchCampaignBeneficiary beneficiary, User owner) {
         String title = "Tu beneficio de Propietario Fundador finalizó";
         String message = "Tu beneficio de lanzamiento finalizó el " + formattedExpiration(beneficiary)
-                + ". Tus pensiones continúan publicadas gratuitamente, pero los beneficios premium y los destacados "
-                + "Fundador ya no están vigentes. Revisa Planes y destacados para ver las opciones disponibles.";
+                + ". Entraste en el período de gracia. Contrata un plan antes de que termine para evitar "
+                + "que tus publicaciones sean pausadas automáticamente.";
         notifyOnce(beneficiary, owner, NotificationType.FOUNDER_BENEFIT_EXPIRED,
                 title, message, dedupKey(beneficiary, "expired"));
     }

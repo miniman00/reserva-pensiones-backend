@@ -127,8 +127,15 @@ public class AdminCommercialPlanController {
             @NotBlank @Size(max = 1500) String reason
     ) {}
 
+    public record PlanPeriodPriceRequest(
+            int periodMonths,
+            BigDecimal totalPrice,
+            boolean enabled
+    ) {}
+
     public record PlanVersionRequest(
             BigDecimal monthlyPrice,
+            List<PlanPeriodPriceRequest> periodPrices,
             @NotBlank @Size(max = 3) String currency,
             Integer maxPensions,
             Integer maxCollaborators,
@@ -143,8 +150,12 @@ public class AdminCommercialPlanController {
             OffsetDateTime effectiveUntil
     ) {
         AdminCommercialPlanService.VersionInput toInput() {
+            List<AdminCommercialPlanService.PeriodPriceInput> prices = periodPrices == null ? null : periodPrices.stream()
+                    .map(item -> new AdminCommercialPlanService.PeriodPriceInput(
+                            item.periodMonths(), item.totalPrice(), item.enabled()))
+                    .toList();
             return new AdminCommercialPlanService.VersionInput(
-                    monthlyPrice, currency, maxPensions, maxCollaborators, maxPhotos, maxVideos,
+                    monthlyPrice, prices, currency, maxPensions, maxCollaborators, maxPhotos, maxVideos,
                     featuredDays, advancedAnalytics, inquiryHistory, consolidatedAnalytics,
                     exportEnabled, effectiveFrom, effectiveUntil
             );

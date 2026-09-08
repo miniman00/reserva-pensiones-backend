@@ -241,9 +241,25 @@ public class MailServiceImpl implements MailService {
                 + "<p><b>%s</b></p>"
                 + "<p>%s</p>"
                 + "<p><a href=\"%s\">Ver Planes y destacados</a></p>"
-                + "<p>Tus pensiones continúan publicadas gratuitamente aunque finalice el beneficio de lanzamiento.</p>")
+                + "<p>Cuando finalice el período de gracia, las publicaciones pueden quedar pausadas hasta que contrates un plan.</p>")
                 .formatted(safeName, safeTitle, safeMessage, safeLink);
         sendHtml(to, subject, html, "FOUNDER_BENEFIT");
+    }
+
+    @Override
+    public void sendOwnerAccessNotice(String to, String displayName, String title, String message, String actionLink) {
+        String safeName = esc(displayName == null || displayName.isBlank() ? "propietario" : displayName);
+        String safeTitle = esc(title == null || title.isBlank() ? "Acceso de propietario" : title);
+        String safeMessage = esc(message == null ? "" : message).replace("\n", "<br>");
+        String safeLink = esc(actionLink == null ? "" : actionLink);
+        String subject = title == null || title.isBlank() ? "Acceso de propietario en Pensiones" : title;
+        String html = ("<p>Hola <b>%s</b>,</p>"
+                + "<p><b>%s</b></p>"
+                + "<p>%s</p>"
+                + "<p><a href=\"%s\">Ver planes</a></p>"
+                + "<p>Tu información y tus publicaciones no se eliminan si el acceso vence. Puedes reactivarlas contratando un plan.</p>")
+                .formatted(safeName, safeTitle, safeMessage, safeLink);
+        sendHtml(to, subject, html, "OWNER_ACCESS");
     }
 
     @Override

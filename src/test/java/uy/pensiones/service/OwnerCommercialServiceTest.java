@@ -18,6 +18,7 @@ import uy.pensiones.model.Pension;
 import uy.pensiones.model.PensionPromotion;
 import uy.pensiones.model.Plan;
 import uy.pensiones.model.PlanVersion;
+import uy.pensiones.model.PlanVersionPeriodPrice;
 import uy.pensiones.model.PromotionProduct;
 import uy.pensiones.model.PromotionProductVersion;
 import uy.pensiones.model.User;
@@ -82,6 +83,11 @@ class OwnerCommercialServiceTest {
                 .featuredDays(5).advancedAnalytics(true).inquiryHistory(true)
                 .consolidatedAnalytics(true).exportEnabled(true)
                 .effectiveFrom(from).status(PlanVersionStatus.PUBLISHED).build();
+        currentPlan.replacePeriodPrices(List.of(
+                PlanVersionPeriodPrice.builder().periodMonths(1).totalPrice(new BigDecimal("1290.00")).enabled(true).build(),
+                PlanVersionPeriodPrice.builder().periodMonths(3).totalPrice(new BigDecimal("3490.00")).enabled(true).build(),
+                PlanVersionPeriodPrice.builder().periodMonths(6).totalPrice(new BigDecimal("6490.00")).enabled(false).build()
+        ));
         PlanVersion overlappingOlderPlan = PlanVersion.builder().id(21L).plan(pro).version(1)
                 .monthlyPrice(new BigDecimal("990.00")).currency("UYU")
                 .effectiveFrom(from.minusMonths(1)).status(PlanVersionStatus.PUBLISHED).build();
@@ -120,13 +126,14 @@ class OwnerCommercialServiceTest {
         when(promotions.ownerPerformance(10L)).thenReturn(List.of(performance));
 
         var entitlementSnapshot = new OwnerEntitlementService.EntitlementSnapshot(
-                10L, true, true, true, EntitlementSource.SUBSCRIPTION,
+                10L, true, true, true, true, EntitlementSource.SUBSCRIPTION,
                 null, null,
                 new OwnerEntitlementService.EffectivePlan(
                         2L, "PRO", "Pro", 22L, 2, 5, 4, 30, 3, 5,
                         true, true, true, true),
                 new OwnerEntitlementService.EffectiveSubscription(
                         70L, SubscriptionSource.PAYMENT, from, from.plusMonths(1)),
+                null,
                 null,
                 new OwnerEntitlementService.UsageSummary(1L, 4, false), List.of(), false);
         when(entitlements.resolve(10L)).thenReturn(entitlementSnapshot);
@@ -148,6 +155,9 @@ class OwnerCommercialServiceTest {
         assertEquals(1, result.plans().size());
         assertEquals(22L, result.plans().get(0).versionId());
         assertEquals(new BigDecimal("1290.00"), result.plans().get(0).monthlyPrice());
+        assertEquals(2, result.plans().get(0).periodPrices().size());
+        assertEquals(3, result.plans().get(0).periodPrices().get(1).periodMonths());
+        assertEquals(new BigDecimal("3490.00"), result.plans().get(0).periodPrices().get(1).totalPrice());
         assertEquals(1, result.promotionProducts().size());
         assertEquals(52L, result.promotionProducts().get(0).versionId());
         assertNotNull(result.currentSubscription());
@@ -180,8 +190,8 @@ class OwnerCommercialServiceTest {
         when(promotions.findEffectiveActiveForOwner(eq(10L), any())).thenReturn(List.of());
         when(promotions.ownerPerformance(10L)).thenReturn(List.of());
         var bypassSnapshot = new OwnerEntitlementService.EntitlementSnapshot(
-                10L, false, false, true, EntitlementSource.BYPASS,
-                null, null, null, null, null,
+                10L, false, false, true, true, EntitlementSource.BYPASS,
+                null, null, null, null, null, null,
                 new OwnerEntitlementService.UsageSummary(0L, null, false), List.of(), false);
         when(entitlements.resolve(10L)).thenReturn(bypassSnapshot);
         when(featuredBenefits.currentUsage(eq(bypassSnapshot), any()))

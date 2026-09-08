@@ -29,18 +29,20 @@ class PensionServiceFounderCampaignTest {
     @Mock private PensionPublicationService publication;
     @Mock private FounderLaunchCampaignService founderCampaign;
     @Mock private FounderFeaturedBenefitService founderFeaturedBenefits;
+    @Mock private OwnerTrialLifecycleService trialLifecycle;
 
     private PensionService service;
 
     @BeforeEach
     void setUp() {
         service = new PensionService(pensions, organizations, orgService, memberships, pensionMembers,
-                studyCenters, entitlements, publication, founderCampaign, founderFeaturedBenefits);
+                studyCenters, entitlements, publication, founderCampaign, founderFeaturedBenefits, trialLifecycle);
     }
 
     @Test
     void firstTransitionToPublishedValidatesPersistsAndAttemptsFounderGrantInSameServiceOperation() {
-        Pension pension = Pension.builder().id(15L).status(PensionStatus.DRAFT).draftStep("publish").build();
+        User owner = User.builder().id(8L).build();
+        Pension pension = Pension.builder().id(15L).owner(owner).status(PensionStatus.DRAFT).draftStep("publish").build();
         when(pensions.saveAndFlush(pension)).thenReturn(pension);
 
         Pension result = service.changePublication(pension, PensionStatus.PUBLISHED);
@@ -48,13 +50,15 @@ class PensionServiceFounderCampaignTest {
         assertThat(result.getStatus()).isEqualTo(PensionStatus.PUBLISHED);
         assertThat(result.getDraftStep()).isNull();
         verify(publication).requirePublishable(pension);
+        verify(entitlements).requirePublicationAccess(8L);
         verify(pensions).saveAndFlush(pension);
         verify(founderCampaign).onFirstValidPublication(pension);
+        verify(trialLifecycle).onFirstValidPublication(eq(pension), any());
     }
 
     @Test
     void republishingAlreadyPublishedPensionDoesNotTryToConsumeAnotherFounderSlot() {
-        Pension pension = Pension.builder().id(15L).status(PensionStatus.PUBLISHED).build();
+        Pension pension = Pension.builder().id(15L).owner(User.builder().id(8L).build()).status(PensionStatus.PUBLISHED).build();
         when(pensions.saveAndFlush(pension)).thenReturn(pension);
 
         service.changePublication(pension, PensionStatus.PUBLISHED);

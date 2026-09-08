@@ -13,6 +13,7 @@ import uy.pensiones.enums.SubscriptionStatus;
 import uy.pensiones.enums.UserRole;
 import uy.pensiones.model.PensionPromotion;
 import uy.pensiones.model.PlanVersion;
+import uy.pensiones.model.PlanVersionPeriodPrice;
 import uy.pensiones.model.PromotionProductVersion;
 import uy.pensiones.model.User;
 import uy.pensiones.payment.PaymentGatewayRegistry;
@@ -121,6 +122,8 @@ public class OwnerCommercialService {
         Map<Long, PlanOffer> result = new LinkedHashMap<>();
         for (PlanVersion version : versions) {
             if (version.getPlan() == null) continue;
+            // FREE is now the internal policy snapshot for the one-time owner trial, never a purchasable offer.
+            if ("FREE".equalsIgnoreCase(version.getPlan().getCode())) continue;
             result.putIfAbsent(version.getPlan().getId(), planOffer(version));
         }
         return List.copyOf(result.values());
@@ -178,12 +181,21 @@ public class OwnerCommercialService {
         var plan = version.getPlan();
         return new PlanOffer(
                 plan.getId(), plan.getCode(), plan.getName(), plan.getDescription(),
-                version.getId(), version.getVersion(), money(version.getMonthlyPrice()), version.getCurrency(),
+                version.getId(), version.getVersion(), money(version.getMonthlyPrice()), planPeriodPrices(version), version.getCurrency(),
                 version.getEffectiveFrom(), version.getEffectiveUntil(),
                 version.getMaxPensions(), version.getMaxCollaborators(), version.getMaxPhotos(), version.getMaxVideos(),
                 version.getFeaturedDays(), version.isAdvancedAnalytics(), version.isInquiryHistory(),
                 version.isConsolidatedAnalytics(), version.isExportEnabled()
         );
+    }
+
+    private List<PlanPeriodPrice> planPeriodPrices(PlanVersion version) {
+        if (version.getPeriodPrices() == null || version.getPeriodPrices().isEmpty()) return List.of();
+        return version.getPeriodPrices().stream()
+                .filter(PlanVersionPeriodPrice::isEnabled)
+                .sorted(java.util.Comparator.comparingInt(PlanVersionPeriodPrice::getPeriodMonths))
+                .map(item -> new PlanPeriodPrice(item.getPeriodMonths(), money(item.getTotalPrice())))
+                .toList();
     }
 
     private PromotionOffer promotionOffer(PromotionProductVersion version) {
@@ -279,12 +291,17 @@ public class OwnerCommercialService {
 
     public record PlanOffer(
             Long planId, String code, String name, String description,
-            Long versionId, int version, BigDecimal monthlyPrice, String currency,
+            Long versionId, int version, BigDecimal monthlyPrice, List<PlanPeriodPrice> periodPrices, String currency,
             OffsetDateTime effectiveFrom, OffsetDateTime effectiveUntil,
             Integer maxPensions, Integer maxCollaboratorsPerPension,
             Integer maxPhotosPerPension, Integer maxVideosPerPension,
             int featuredDays, boolean advancedAnalytics, boolean inquiryHistory,
             boolean consolidatedAnalytics, boolean exportEnabled
+    ) {}
+
+    public record PlanPeriodPrice(
+            int periodMonths,
+            BigDecimal totalPrice
     ) {}
 
     public record PromotionOffer(

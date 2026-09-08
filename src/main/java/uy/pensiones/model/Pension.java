@@ -74,6 +74,13 @@ public class Pension {
     @Builder.Default
     private Boolean featured = false;
 
+    /** Motivo comercial de una pausa automática. Null para pausas manuales o de otro origen. */
+    @Column(name = "commercial_pause_reason", length = 40)
+    private String commercialPauseReason;
+
+    @Column(name = "commercial_paused_at")
+    private OffsetDateTime commercialPausedAt;
+
     private Double lat;
     private Double lng;
 

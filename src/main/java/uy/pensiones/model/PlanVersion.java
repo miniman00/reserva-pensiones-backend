@@ -6,6 +6,12 @@ import uy.pensiones.enums.PlanVersionStatus;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Entity
 @Table(
@@ -33,6 +39,11 @@ public class PlanVersion {
     @Column(nullable = false, length = 3)
     @Builder.Default
     private String currency = "UYU";
+
+    @OneToMany(mappedBy = "planVersion", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("periodMonths ASC")
+    @Builder.Default
+    private List<PlanVersionPeriodPrice> periodPrices = new ArrayList<>();
 
     private Integer maxPensions;
     private Integer maxCollaborators;
@@ -89,5 +100,30 @@ public class PlanVersion {
     @PreUpdate
     void preUpdate() {
         updatedAt = OffsetDateTime.now();
+    }
+
+    public void replacePeriodPrices(List<PlanVersionPeriodPrice> prices) {
+        if (periodPrices == null) periodPrices = new ArrayList<>();
+        List<PlanVersionPeriodPrice> incoming = prices == null ? List.of() : prices.stream()
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        Map<Integer, PlanVersionPeriodPrice> existingByPeriod = new HashMap<>();
+        for (PlanVersionPeriodPrice current : periodPrices) {
+            existingByPeriod.put(current.getPeriodMonths(), current);
+        }
+        Set<Integer> incomingPeriods = new HashSet<>();
+        for (PlanVersionPeriodPrice price : incoming) incomingPeriods.add(price.getPeriodMonths());
+        periodPrices.removeIf(current -> !incomingPeriods.contains(current.getPeriodMonths()));
+
+        for (PlanVersionPeriodPrice price : incoming) {
+            PlanVersionPeriodPrice current = existingByPeriod.get(price.getPeriodMonths());
+            if (current != null) {
+                current.setTotalPrice(price.getTotalPrice());
+                current.setEnabled(price.isEnabled());
+                continue;
+            }
+            price.setPlanVersion(this);
+            periodPrices.add(price);
+        }
     }
 }

@@ -40,6 +40,7 @@ class AdminFounderCampaignServiceTest {
     @Mock PlanVersionRepository planVersions;
     @Mock FounderLaunchCampaignService founderCampaign;
     @Mock FounderFeaturedBenefitService featuredBenefits;
+    @Mock OwnerTrialLifecycleService trialLifecycle;
     @Mock AdminAuditService audit;
 
     AdminFounderCampaignService service;
@@ -48,7 +49,7 @@ class AdminFounderCampaignServiceTest {
     @BeforeEach
     void setUp() {
         service = new AdminFounderCampaignService(campaigns, beneficiaries, events, pensions, planVersions,
-                founderCampaign, featuredBenefits, audit, new ObjectMapper().findAndRegisterModules());
+                founderCampaign, featuredBenefits, trialLifecycle, audit, new ObjectMapper().findAndRegisterModules());
         actor = BackofficeUser.builder().id(99L).username("soporte").displayName("Soporte").build();
         when(audit.requireReason(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
     }
@@ -68,6 +69,31 @@ class AdminFounderCampaignServiceTest {
 
         assertThat(error.getStatusCode().value()).isEqualTo(409);
         verify(campaigns, never()).save(any());
+    }
+
+    @Test
+    void manualFounderGrantConsumesTrialOpportunityAndRestoresCommercialAccess() {
+        User owner = User.builder().id(10L).email("owner@example.com").name("Owner").build();
+        Pension pension = Pension.builder().id(20L).name("Pensión").owner(owner).createdBy(owner)
+                .status(uy.pensiones.enums.PensionStatus.PUBLISHED).build();
+        OffsetDateTime grantedAt = OffsetDateTime.now().minusMinutes(1);
+        when(pensions.findWithOwnerById(20L)).thenReturn(Optional.of(pension));
+        when(founderCampaign.grantManually(eq(pension), eq(actor), eq("Excepción comercial")))
+                .thenReturn(new FounderLaunchCampaignService.GrantResult(
+                        FounderLaunchCampaignService.GrantDecision.GRANTED, 70L, 1, grantedAt,
+                        grantedAt.plusDays(365), null, null));
+        LaunchCampaignBeneficiary beneficiary = LaunchCampaignBeneficiary.builder()
+                .id(70L).campaign(campaign()).user(owner).sourcePension(pension).grantedOrder(1)
+                .grantedAt(grantedAt).expiresAt(grantedAt.plusDays(365))
+                .status(LaunchCampaignBeneficiaryStatus.ACTIVE).maxFeaturedPensionsSnapshot(3).build();
+        when(beneficiaries.findAdminDetailById(70L)).thenReturn(Optional.of(beneficiary));
+
+        service.grantManually(20L, "Excepción comercial", actor);
+
+        verify(trialLifecycle).consumeByFounderBenefit(owner, pension, grantedAt);
+        verify(audit).record(eq(actor), eq(AdminAuditAction.ADMIN_GRANT_LAUNCH_CAMPAIGN_BENEFIT),
+                eq(AdminAuditEntityType.LAUNCH_CAMPAIGN_BENEFICIARY), eq(70L), isNull(), any(),
+                eq("Excepción comercial"));
     }
 
     @Test
@@ -115,6 +141,7 @@ class AdminFounderCampaignServiceTest {
         assertThat(result.expiresAt()).isAfter(previousExpiration);
         verify(featuredBenefits).extendForBeneficiary(eq(beneficiary), eq(previousExpiration),
                 eq(result.expiresAt()), any());
+        verify(trialLifecycle).consumeByFounderBenefit(owner, pension, beneficiary.getGrantedAt());
         verify(audit).record(eq(actor), eq(AdminAuditAction.ADMIN_EXTEND_LAUNCH_CAMPAIGN_BENEFIT),
                 eq(AdminAuditEntityType.LAUNCH_CAMPAIGN_BENEFICIARY), eq(71L), any(), any(),
                 eq("Extensión comercial"));

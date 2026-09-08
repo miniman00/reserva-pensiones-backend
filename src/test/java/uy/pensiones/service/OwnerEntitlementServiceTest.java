@@ -12,6 +12,9 @@ import uy.pensiones.enums.UserRole;
 import uy.pensiones.model.LaunchCampaign;
 import uy.pensiones.model.LaunchCampaignBeneficiary;
 import uy.pensiones.model.OwnerSubscription;
+import uy.pensiones.model.OwnerTrialSettings;
+import uy.pensiones.model.OwnerTrialLifecycle;
+import uy.pensiones.enums.OwnerTrialConsumptionReason;
 import uy.pensiones.model.Plan;
 import uy.pensiones.model.PlanVersion;
 import uy.pensiones.model.User;
@@ -42,6 +45,7 @@ class OwnerEntitlementServiceTest {
     private OwnerEntitlementQueryRepository usage;
     private OwnerEntitlementUserLockRepository locks;
     private PensionRepository pensions;
+    private OwnerTrialLifecycleService trialLifecycle;
     private OwnerEntitlementService service;
 
     @BeforeEach
@@ -54,7 +58,10 @@ class OwnerEntitlementServiceTest {
         usage = mock(OwnerEntitlementQueryRepository.class);
         locks = mock(OwnerEntitlementUserLockRepository.class);
         pensions = mock(PensionRepository.class);
-        service = new OwnerEntitlementService(properties, users, subscriptions, launchBenefits, planVersions, usage, locks, pensions);
+        trialLifecycle = mock(OwnerTrialLifecycleService.class);
+        lenient().when(trialLifecycle.settings()).thenReturn(OwnerTrialSettings.builder()
+                .id((short) 1).enabled(false).durationDays(90).graceDays(7).build());
+        service = new OwnerEntitlementService(properties, users, subscriptions, launchBenefits, planVersions, usage, locks, pensions, trialLifecycle);
     }
 
     @Test
@@ -229,6 +236,68 @@ class OwnerEntitlementServiceTest {
         var ex = assertThrows(org.springframework.web.server.ResponseStatusException.class,
                 () -> service.requireAdvancedAnalytics(10L));
         assertEquals(403, ex.getStatusCode().value());
+    }
+
+
+    @Test
+    void enabledTrialPolicyAllowsPendingOwnerAndStartsFromConfiguredFreePlan() {
+        properties.getMonetization().setEnabled(true);
+        User user = marketplaceUser(10L);
+        OffsetDateTime now = OffsetDateTime.now();
+        Plan free = Plan.builder().id(1L).code("FREE").name("Prueba gratuita").active(true).build();
+        PlanVersion version = PlanVersion.builder().id(11L).plan(free).version(2)
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now.minusDays(1))
+                .maxPensions(1).maxPhotos(15).maxVideos(1).build();
+        when(trialLifecycle.settings()).thenReturn(OwnerTrialSettings.builder()
+                .id((short) 1).enabled(true).durationDays(90).graceDays(7).trialPlanVersion(version).build());
+        when(users.findById(10L)).thenReturn(Optional.of(user));
+        when(usage.countResponsiblePensions(10L)).thenReturn(0L);
+        when(usage.findPensionUsage(eq(10L), any())).thenReturn(List.of());
+        when(subscriptions.findEffectiveActiveDetailed(eq(10L), any(), eq(SubscriptionStatus.ACTIVE))).thenReturn(List.of());
+        when(launchBenefits.findEffectiveDetailed(eq(10L), eq(FounderLaunchCampaignService.FOUNDER_CAMPAIGN_CODE),
+                eq(LaunchCampaignBeneficiaryStatus.ACTIVE), any())).thenReturn(Optional.empty());
+
+        var result = service.resolve(10L);
+
+        assertEquals(EntitlementSource.TRIAL_PENDING, result.source());
+        assertTrue(result.accessActive());
+        assertEquals("PENDING", result.trialAccess().phase());
+        assertEquals(90, result.trialAccess().durationDays());
+        assertEquals("FREE", result.plan().planCode());
+    }
+
+    @Test
+    void consumedExpiredTrialCannotReturnToFreeAndPublicationRequiresPayment() {
+        properties.getMonetization().setEnabled(true);
+        User user = marketplaceUser(10L);
+        OffsetDateTime now = OffsetDateTime.now();
+        Plan free = Plan.builder().id(1L).code("FREE").name("Prueba gratuita").active(true).build();
+        PlanVersion version = PlanVersion.builder().id(11L).plan(free).version(2)
+                .status(PlanVersionStatus.PUBLISHED).effectiveFrom(now.minusDays(100)).build();
+        OwnerTrialLifecycle lifecycle = OwnerTrialLifecycle.builder()
+                .id(99L).user(user).consumptionReason(OwnerTrialConsumptionReason.TRIAL_STARTED)
+                .trialPlanVersion(version).consumedAt(now.minusDays(100)).trialStartedAt(now.minusDays(100))
+                .trialExpiresAt(now.minusDays(10)).graceExpiresAt(now.minusDays(3))
+                .durationDaysSnapshot(90).graceDaysSnapshot(7).build();
+        when(trialLifecycle.settings()).thenReturn(OwnerTrialSettings.builder()
+                .id((short) 1).enabled(true).durationDays(90).graceDays(7).trialPlanVersion(version).build());
+        when(trialLifecycle.lifecycle(10L)).thenReturn(lifecycle);
+        when(users.findById(10L)).thenReturn(Optional.of(user));
+        when(usage.countResponsiblePensions(10L)).thenReturn(1L);
+        when(usage.findPensionUsage(eq(10L), any())).thenReturn(List.of());
+        when(subscriptions.findEffectiveActiveDetailed(eq(10L), any(), eq(SubscriptionStatus.ACTIVE))).thenReturn(List.of());
+        when(launchBenefits.findEffectiveDetailed(eq(10L), eq(FounderLaunchCampaignService.FOUNDER_CAMPAIGN_CODE),
+                eq(LaunchCampaignBeneficiaryStatus.ACTIVE), any())).thenReturn(Optional.empty());
+
+        var result = service.resolve(10L);
+        assertEquals(EntitlementSource.ACCESS_EXPIRED, result.source());
+        assertFalse(result.accessActive());
+        assertEquals("EXPIRED", result.trialAccess().phase());
+
+        var ex = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service.requirePublicationAccess(10L));
+        assertEquals(402, ex.getStatusCode().value());
+        verify(planVersions, never()).findEffectiveFreeVersions(anyString(), any(), any());
     }
 
     @Test

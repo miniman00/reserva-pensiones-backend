@@ -241,11 +241,22 @@ public class PaymentTransactionService {
         Long versionId = requireId(input.planVersionId());
         Long planId = planVersions.findPlanIdByVersionId(versionId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Versión de plan no encontrada"));
         Plan plan = plans.findByIdForUpdate(planId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Plan no encontrado"));
+        if ("FREE".equalsIgnoreCase(plan.getCode())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La prueba gratuita no es un plan comprable. Selecciona un plan pago disponible");
+        }
         PlanVersion version = planVersions.findById(versionId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Versión de plan no encontrada"));
         if (!plan.isActive() || version.getStatus() != PlanVersionStatus.PUBLISHED || version.getEffectiveFrom() == null || now.isBefore(version.getEffectiveFrom()) || (version.getEffectiveUntil() != null && !now.isBefore(version.getEffectiveUntil()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "La versión del plan no está disponible para un nuevo pago");
         }
-        BigDecimal amount = version.getMonthlyPrice().multiply(BigDecimal.valueOf(months)).setScale(2, RoundingMode.HALF_UP);
+        PlanVersionPeriodPrice periodPrice = (version.getPeriodPrices() == null ? List.<PlanVersionPeriodPrice>of() : version.getPeriodPrices()).stream()
+                .filter(item -> item.getPeriodMonths() == months && item.isEnabled())
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "El período seleccionado no está disponible para este plan"));
+        BigDecimal amount = periodPrice.getTotalPrice() == null
+                ? BigDecimal.ZERO
+                : periodPrice.getTotalPrice().setScale(2, RoundingMode.HALF_UP);
         if (amount.signum() <= 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "Una versión de precio cero no debe procesarse como pago");
         return base(provider, providerMode, actor, key, PaymentPurpose.SUBSCRIPTION, user, amount, version.getCurrency())
                 .planVersion(version).subscriptionPeriodMonths(months).build();

@@ -12,6 +12,7 @@ import uy.pensiones.enums.PlanVersionStatus;
 import uy.pensiones.model.BackofficeUser;
 import uy.pensiones.model.Plan;
 import uy.pensiones.model.PlanVersion;
+import uy.pensiones.model.PlanVersionPeriodPrice;
 import uy.pensiones.repo.PlanRepository;
 import uy.pensiones.repo.PlanVersionRepository;
 
@@ -19,6 +20,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Currency;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +32,7 @@ public class AdminCommercialPlanService {
 
     private static final int MAX_LIMIT_VALUE = 100_000;
     private static final int MAX_FEATURED_DAYS = 3_650;
+    private static final List<Integer> SUPPORTED_SUBSCRIPTION_PERIODS = List.of(1, 3, 6, 12);
 
     private final PlanRepository plans;
     private final PlanVersionRepository versions;
@@ -262,7 +265,7 @@ public class AdminCommercialPlanService {
     private PlanVersionDTO versionDto(PlanVersion version, OffsetDateTime now) {
         return new PlanVersionDTO(
                 version.getId(), version.getPlan().getId(), version.getVersion(), version.getMonthlyPrice(),
-                version.getCurrency(), version.getMaxPensions(), version.getMaxCollaborators(), version.getMaxPhotos(),
+                periodPriceDtos(version), version.getCurrency(), version.getMaxPensions(), version.getMaxCollaborators(), version.getMaxPhotos(),
                 version.getMaxVideos(), version.getFeaturedDays(), version.isAdvancedAnalytics(), version.isInquiryHistory(),
                 version.isConsolidatedAnalytics(), version.isExportEnabled(), version.getEffectiveFrom(),
                 version.getEffectiveUntil(), version.getStatus(), effectiveState(version, now), version.getPublishedAt(),
@@ -295,6 +298,7 @@ public class AdminCommercialPlanService {
         result.put("planId", version.getPlan().getId());
         result.put("version", version.getVersion());
         result.put("monthlyPrice", version.getMonthlyPrice());
+        result.put("periodPrices", periodPriceDtos(version));
         result.put("currency", version.getCurrency());
         result.put("maxPensions", version.getMaxPensions());
         result.put("maxCollaborators", version.getMaxCollaborators());
@@ -314,17 +318,8 @@ public class AdminCommercialPlanService {
 
     private ValidatedVersion validateVersion(VersionInput input) {
         if (input == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Los datos de la versión son obligatorios");
-        BigDecimal price = input.monthlyPrice() == null ? null : input.monthlyPrice().stripTrailingZeros();
-        if (price == null || price.signum() < 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El precio mensual no puede ser negativo");
-        }
-        if (price.scale() > 2) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El precio mensual admite como máximo 2 decimales");
-        }
-        if (price.compareTo(new BigDecimal("9999999999.99")) > 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El precio mensual es demasiado alto");
-        }
-        price = price.setScale(2, RoundingMode.UNNECESSARY);
+        BigDecimal price = validatePrice(input.monthlyPrice(), "El precio mensual");
+        List<PeriodPriceInput> periodPrices = validatePeriodPrices(input.periodPrices(), price);
         String currency = validateCurrency(input.currency());
         Integer maxPensions = validateLimit(input.maxPensions(), "máximo de pensiones");
         Integer maxCollaborators = validateLimit(input.maxCollaborators(), "máximo de colaboradores");
@@ -336,13 +331,20 @@ public class AdminCommercialPlanService {
                     "Los días destacados deben estar entre 0 y " + MAX_FEATURED_DAYS);
         }
         validateDates(input.effectiveFrom(), input.effectiveUntil());
-        return new ValidatedVersion(price, currency, maxPensions, maxCollaborators, maxPhotos, maxVideos,
+        return new ValidatedVersion(price, periodPrices, currency, maxPensions, maxCollaborators, maxPhotos, maxVideos,
                 featuredDays, input.advancedAnalytics(), input.inquiryHistory(), input.consolidatedAnalytics(),
                 input.exportEnabled(), input.effectiveFrom(), input.effectiveUntil());
     }
 
     private void apply(PlanVersion version, ValidatedVersion data) {
         version.setMonthlyPrice(data.monthlyPrice());
+        version.replacePeriodPrices(data.periodPrices().stream()
+                .map(item -> PlanVersionPeriodPrice.builder()
+                        .periodMonths(item.periodMonths())
+                        .totalPrice(item.totalPrice())
+                        .enabled(item.enabled())
+                        .build())
+                .toList());
         version.setCurrency(data.currency());
         version.setMaxPensions(data.maxPensions());
         version.setMaxCollaborators(data.maxCollaborators());
@@ -355,6 +357,70 @@ public class AdminCommercialPlanService {
         version.setExportEnabled(data.exportEnabled());
         version.setEffectiveFrom(data.effectiveFrom());
         version.setEffectiveUntil(data.effectiveUntil());
+    }
+
+    private List<PeriodPriceDTO> periodPriceDtos(PlanVersion version) {
+        if (version.getPeriodPrices() == null || version.getPeriodPrices().isEmpty()) return List.of();
+        return version.getPeriodPrices().stream()
+                .sorted(java.util.Comparator.comparingInt(PlanVersionPeriodPrice::getPeriodMonths))
+                .map(item -> new PeriodPriceDTO(
+                        item.getPeriodMonths(),
+                        item.getTotalPrice() == null ? BigDecimal.ZERO.setScale(2) : item.getTotalPrice().setScale(2, RoundingMode.HALF_UP),
+                        item.isEnabled()))
+                .toList();
+    }
+
+    private List<PeriodPriceInput> validatePeriodPrices(List<PeriodPriceInput> raw, BigDecimal monthlyPrice) {
+        if (raw == null || raw.isEmpty()) {
+            // Backward compatibility for older Backoffice clients: preserve the historical
+            // monthlyPrice * months behavior, but persist it explicitly from now on.
+            return SUPPORTED_SUBSCRIPTION_PERIODS.stream()
+                    .map(months -> new PeriodPriceInput(
+                            months,
+                            monthlyPrice.multiply(BigDecimal.valueOf(months)).setScale(2, RoundingMode.HALF_UP),
+                            true))
+                    .toList();
+        }
+
+        Map<Integer, PeriodPriceInput> unique = new LinkedHashMap<>();
+        for (PeriodPriceInput item : raw) {
+            if (item == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La configuración de períodos contiene una entrada inválida");
+            }
+            int months = item.periodMonths();
+            if (!SUPPORTED_SUBSCRIPTION_PERIODS.contains(months)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Solo se admiten períodos de 1, 3, 6 o 12 meses");
+            }
+            if (unique.containsKey(months)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El período de " + months + " meses está repetido");
+            }
+            BigDecimal totalPrice = validatePrice(item.totalPrice(),
+                    "El precio total para " + (months == 1 ? "1 mes" : months + " meses"));
+            unique.put(months, new PeriodPriceInput(months, totalPrice, item.enabled()));
+        }
+
+        List<PeriodPriceInput> normalized = new ArrayList<>();
+        for (Integer months : SUPPORTED_SUBSCRIPTION_PERIODS) {
+            PeriodPriceInput item = unique.get(months);
+            if (item != null) normalized.add(item);
+        }
+        return List.copyOf(normalized);
+    }
+
+    private BigDecimal validatePrice(BigDecimal raw, String label) {
+        BigDecimal value = raw == null ? null : raw.stripTrailingZeros();
+        if (value == null || value.signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " no puede ser negativo");
+        }
+        if (value.scale() > 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " admite como máximo 2 decimales");
+        }
+        if (value.compareTo(new BigDecimal("9999999999.99")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " es demasiado alto");
+        }
+        return value.setScale(2, RoundingMode.UNNECESSARY);
     }
 
     private void validateDates(OffsetDateTime from, OffsetDateTime until) {
@@ -455,6 +521,7 @@ public class AdminCommercialPlanService {
             Long planId,
             int version,
             BigDecimal monthlyPrice,
+            List<PeriodPriceDTO> periodPrices,
             String currency,
             Integer maxPensions,
             Integer maxCollaborators,
@@ -475,8 +542,21 @@ public class AdminCommercialPlanService {
             OffsetDateTime updatedAt
     ) {}
 
+    public record PeriodPriceDTO(
+            int periodMonths,
+            BigDecimal totalPrice,
+            boolean enabled
+    ) {}
+
+    public record PeriodPriceInput(
+            int periodMonths,
+            BigDecimal totalPrice,
+            boolean enabled
+    ) {}
+
     public record VersionInput(
             BigDecimal monthlyPrice,
+            List<PeriodPriceInput> periodPrices,
             String currency,
             Integer maxPensions,
             Integer maxCollaborators,
@@ -493,6 +573,7 @@ public class AdminCommercialPlanService {
 
     private record ValidatedVersion(
             BigDecimal monthlyPrice,
+            List<PeriodPriceInput> periodPrices,
             String currency,
             Integer maxPensions,
             Integer maxCollaborators,

@@ -33,13 +33,15 @@ public class PensionService {
     private final PensionPublicationService publication;
     private final FounderLaunchCampaignService founderCampaign;
     private final FounderFeaturedBenefitService founderFeaturedBenefits;
+    private final OwnerTrialLifecycleService trialLifecycle;
 
     public PensionService(PensionRepository pensions, OrganizationRepository orgs,
                           OrgService orgService, MembershipRepository memberships,
                           PensionMemberRepository pensionMembers, StudyCenterCatalogService studyCenterCatalog,
                           OwnerEntitlementService entitlements, PensionPublicationService publication,
                           FounderLaunchCampaignService founderCampaign,
-                          FounderFeaturedBenefitService founderFeaturedBenefits) {
+                          FounderFeaturedBenefitService founderFeaturedBenefits,
+                          OwnerTrialLifecycleService trialLifecycle) {
         this.pensions = pensions; this.orgs = orgs;
         this.orgService = orgService; this.memberships = memberships;
         this.pensionMembers = pensionMembers;
@@ -48,6 +50,7 @@ public class PensionService {
         this.publication = publication;
         this.founderCampaign = founderCampaign;
         this.founderFeaturedBenefits = founderFeaturedBenefits;
+        this.trialLifecycle = trialLifecycle;
     }
 
     public List<Pension> myPensions(Long userId) {
@@ -139,16 +142,25 @@ public class PensionService {
         PensionStatus previousStatus = target.getStatus();
         if (nextStatus == PensionStatus.PUBLISHED) {
             publication.requirePublishable(target);
+            User responsible = target.getOwner() != null ? target.getOwner() : target.getCreatedBy();
+            if (responsible == null || responsible.getId() == null) {
+                throw badRequest("La pensión no tiene un propietario responsable válido.");
+            }
+            entitlements.requirePublicationAccess(responsible.getId());
         }
 
         target.setStatus(nextStatus);
+        // Any explicit owner/admin publication change takes precedence over an automatic commercial pause.
+        target.setCommercialPauseReason(null);
+        target.setCommercialPausedAt(null);
         if (nextStatus != PensionStatus.DRAFT) {
             target.setDraftStep(null);
         }
 
         Pension saved = pensions.saveAndFlush(target);
         if (previousStatus != PensionStatus.PUBLISHED && nextStatus == PensionStatus.PUBLISHED) {
-            founderCampaign.onFirstValidPublication(saved);
+            var founderResult = founderCampaign.onFirstValidPublication(saved);
+            trialLifecycle.onFirstValidPublication(saved, founderResult);
         }
         return saved;
     }

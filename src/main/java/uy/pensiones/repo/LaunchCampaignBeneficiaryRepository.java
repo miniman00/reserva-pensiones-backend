@@ -74,6 +74,16 @@ public interface LaunchCampaignBeneficiaryRepository extends JpaRepository<Launc
                                                                @Param("status") LaunchCampaignBeneficiaryStatus status,
                                                                @Param("now") OffsetDateTime now);
 
+    @EntityGraph(attributePaths = {"campaign", "planVersion", "planVersion.plan", "user", "sourcePension"})
+    @Query("""
+            select b from LaunchCampaignBeneficiary b
+             where b.user.id = :userId
+               and b.campaign.code = :campaignCode
+             order by b.grantedAt desc, b.id desc
+            """)
+    List<LaunchCampaignBeneficiary> findHistoryDetailed(@Param("userId") Long userId,
+                                                         @Param("campaignCode") String campaignCode);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select b from LaunchCampaignBeneficiary b
