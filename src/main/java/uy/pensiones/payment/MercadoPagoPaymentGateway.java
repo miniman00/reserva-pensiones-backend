@@ -130,20 +130,25 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         ProviderSettings settings = settings();
         if (request.idempotencyKey() == null || request.idempotencyKey().isBlank()) throw bad("Idempotency key obligatoria para reembolsar");
 
-        JsonNode body = null;
-        if (request.amount() != null) {
-            if (request.amount().signum() <= 0) throw bad("El importe del reembolso parcial debe ser mayor que cero");
-            String paymentId = request.payment().providerPaymentId();
-            if (paymentId == null || paymentId.isBlank()) throw bad("Mercado Pago requiere el payment ID para un reembolso parcial");
-            ObjectNode partial = objectMapper.createObjectNode();
-            ObjectNode tx = partial.putArray("transactions").addObject();
-            tx.put("id", paymentId);
-            tx.put("amount", money(request.amount()));
-            body = partial;
-        }
+        JsonNode body = request.amount() == null ? null : refundTransactionBody(request, request.amount(), false);
 
-        JsonNode response = exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
-                settings.accessToken(), request.idempotencyKey(), body);
+        JsonNode response;
+        try {
+            response = exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
+                    settings.accessToken(), request.idempotencyKey(), body);
+        } catch (ResponseStatusException e) {
+            // La documentacion de Orders indica body vacio para un reembolso total. En SANDBOX
+            // algunas orders de prueba responden property_value sobre refund_amount incluso
+            // con un POST realmente sin body. Solo para ese error reintentamos con la forma
+            // documentada de transaccion y el importe total original.
+            if (request.amount() != null || !isRefundAmountPatternError(e)) throw e;
+            ObjectNode explicitFull = refundTransactionBody(request, request.originalAmount(), true);
+            String fallbackKey = fullRefundFallbackIdempotencyKey(request.idempotencyKey());
+            log.warn("mercado_pago_full_refund_empty_body_rejected orderId={} providerPaymentId={} retryingWithExplicitAmount=true",
+                    orderId, request.payment().providerPaymentId());
+            response = exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
+                    settings.accessToken(), fallbackKey, explicitFull);
+        }
         verifyOrderReference(response, request.payment().merchantReference());
 
         // La respuesta del endpoint de refund puede ser resumida. Consultamos la order
@@ -152,6 +157,36 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         verifyOrderReference(order, request.payment().merchantReference());
         MappedStatus mapped = mapStatus(order);
         return new PaymentStatusResult(mapped.status(), mapped.providerStatus(), extractPaymentId(order), extractRefundedAmount(order));
+    }
+
+    ObjectNode refundTransactionBody(PaymentRefundRequest request, BigDecimal amount, boolean fullFallback) {
+        if (amount == null || amount.signum() <= 0) {
+            throw bad(fullFallback
+                    ? "Mercado Pago requiere el importe original para reintentar el reembolso total"
+                    : "El importe del reembolso parcial debe ser mayor que cero");
+        }
+        String paymentId = request == null || request.payment() == null ? null : request.payment().providerPaymentId();
+        if (paymentId == null || paymentId.isBlank()) {
+            throw bad("Mercado Pago requiere el payment ID para reembolsar la transaccion");
+        }
+        ObjectNode payload = objectMapper.createObjectNode();
+        ObjectNode tx = payload.putArray("transactions").addObject();
+        tx.put("id", paymentId.trim());
+        tx.put("amount", money(amount));
+        return payload;
+    }
+
+    String fullRefundFallbackIdempotencyKey(String originalKey) {
+        String seed = (originalKey == null ? "" : originalKey) + ":mp-full-refund-explicit";
+        return java.util.UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private boolean isRefundAmountPatternError(ResponseStatusException error) {
+        if (error == null || error.getReason() == null) return false;
+        String reason = error.getReason().toLowerCase(Locale.ROOT);
+        return reason.contains("property_value")
+                && reason.contains("refund_amount")
+                && reason.contains("pattern");
     }
 
     @Override
