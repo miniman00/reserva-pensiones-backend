@@ -217,6 +217,25 @@ public class PaymentTransactionService {
     }
 
     @Transactional
+    public PaymentRecord applyProviderStatusOwnerRefresh(Long paymentId, PaymentGateway.PaymentStatusResult result) {
+        PaymentRecord p = lock(paymentId);
+        p.setLastReconciliationAttemptAt(OffsetDateTime.now(ZoneOffset.UTC));
+        p.setLastReconciliationError(null);
+        if (p.getProviderPaymentId() == null && result.providerPaymentId() != null) p.setProviderPaymentId(result.providerPaymentId());
+        boolean refundIncreased = updateProviderRefundedAmount(p, result.refundedAmount());
+        return applyStatus(p, result.status(), result.providerStatus(), PaymentEventSource.PROVIDER_SYNC,
+                "Actualización solicitada por el portal después del retorno del checkout", refundIncreased);
+    }
+
+    @Transactional
+    public void recordOwnerRefreshFailure(Long paymentId, RuntimeException error) {
+        PaymentRecord p = lock(paymentId);
+        p.setLastReconciliationAttemptAt(OffsetDateTime.now(ZoneOffset.UTC));
+        p.setLastReconciliationError(safeReconciliationError(error));
+        payments.save(p);
+    }
+
+    @Transactional
     public void recordAutomaticFailure(Long paymentId, RuntimeException error) {
         PaymentRecord p = lock(paymentId);
         p.setLastReconciliationAttemptAt(OffsetDateTime.now(ZoneOffset.UTC));

@@ -22,6 +22,7 @@ import uy.pensiones.model.User;
 import uy.pensiones.repo.UserRepository;
 import uy.pensiones.service.OwnerPaymentCheckoutService;
 import uy.pensiones.service.OwnerPaymentQueryService;
+import uy.pensiones.service.OwnerPaymentRefreshService;
 
 @RestController
 @RequestMapping("/api/owner/payments")
@@ -29,11 +30,14 @@ public class OwnerPaymentController {
 
     private final OwnerPaymentCheckoutService checkouts;
     private final OwnerPaymentQueryService queries;
+    private final OwnerPaymentRefreshService refreshes;
     private final UserRepository users;
 
-    public OwnerPaymentController(OwnerPaymentCheckoutService checkouts, OwnerPaymentQueryService queries, UserRepository users) {
+    public OwnerPaymentController(OwnerPaymentCheckoutService checkouts, OwnerPaymentQueryService queries,
+                                  OwnerPaymentRefreshService refreshes, UserRepository users) {
         this.checkouts = checkouts;
         this.queries = queries;
+        this.refreshes = refreshes;
         this.users = users;
     }
 
@@ -50,6 +54,13 @@ public class OwnerPaymentController {
             @AuthenticationPrincipal OAuth2User principal,
             @PathVariable Long paymentId) {
         return queries.detail(resolveUserId(principal), paymentId);
+    }
+
+    @PostMapping("/{paymentId}/refresh")
+    public OwnerPaymentQueryService.OwnerPaymentDTO refresh(
+            @AuthenticationPrincipal OAuth2User principal,
+            @PathVariable Long paymentId) {
+        return refreshes.refresh(resolveUserId(principal), paymentId);
     }
 
     @PostMapping("/checkouts/subscriptions")
