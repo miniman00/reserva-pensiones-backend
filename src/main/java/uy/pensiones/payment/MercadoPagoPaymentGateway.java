@@ -130,29 +130,47 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         ProviderSettings settings = settings();
         if (request.idempotencyKey() == null || request.idempotencyKey().isBlank()) throw bad("Idempotency key obligatoria para reembolsar");
 
+        // Validamos la identidad sobre la order completa antes de ejecutar una operación
+        // irreversible. La respuesta de POST /refund es resumida y no garantiza
+        // external_reference, por lo que no debe usarse para esta verificación.
+        JsonNode beforeRefund = exchange("GET", "/v1/orders/" + encodePath(orderId), settings.accessToken(), null, null);
+        verifyOrderReference(beforeRefund, request.payment().merchantReference());
+        MappedStatus beforeStatus = mapStatus(beforeRefund);
+        if (request.amount() == null && beforeStatus.status() == PaymentStatus.REFUNDED) {
+            return new PaymentStatusResult(beforeStatus.status(), beforeStatus.providerStatus(),
+                    extractPaymentId(beforeRefund), extractRefundedAmount(beforeRefund));
+        }
+
         JsonNode body = request.amount() == null ? null : refundTransactionBody(request, request.amount(), false);
 
-        JsonNode response;
         try {
-            response = exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
+            exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
                     settings.accessToken(), request.idempotencyKey(), body);
         } catch (ResponseStatusException e) {
-            // La documentacion de Orders indica body vacio para un reembolso total. En SANDBOX
-            // algunas orders de prueba responden property_value sobre refund_amount incluso
-            // con un POST realmente sin body. Solo para ese error reintentamos con la forma
-            // documentada de transaccion y el importe total original.
-            if (request.amount() != null || !isRefundAmountPatternError(e)) throw e;
-            ObjectNode explicitFull = refundTransactionBody(request, request.originalAmount(), true);
-            String fallbackKey = fullRefundFallbackIdempotencyKey(request.idempotencyKey());
-            log.warn("mercado_pago_full_refund_empty_body_rejected orderId={} providerPaymentId={} retryingWithExplicitAmount=true",
-                    orderId, request.payment().providerPaymentId());
-            response = exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
-                    settings.accessToken(), fallbackKey, explicitFull);
+            if (isOrderAlreadyRefundedError(e)) {
+                log.warn("mercado_pago_refund_already_completed orderId={} reconcilingOrder=true", orderId);
+            } else {
+                // La documentacion de Orders indica body vacio para un reembolso total. En SANDBOX
+                // algunas orders de prueba responden property_value sobre refund_amount incluso
+                // con un POST realmente sin body. Solo para ese error reintentamos con la forma
+                // documentada de transaccion y el importe total original.
+                if (request.amount() != null || !isRefundAmountPatternError(e)) throw e;
+                ObjectNode explicitFull = refundTransactionBody(request, request.originalAmount(), true);
+                String fallbackKey = fullRefundFallbackIdempotencyKey(request.idempotencyKey());
+                log.warn("mercado_pago_full_refund_empty_body_rejected orderId={} providerPaymentId={} retryingWithExplicitAmount=true",
+                        orderId, request.payment().providerPaymentId());
+                try {
+                    exchange("POST", "/v1/orders/" + encodePath(orderId) + "/refund",
+                            settings.accessToken(), fallbackKey, explicitFull);
+                } catch (ResponseStatusException fallbackError) {
+                    if (!isOrderAlreadyRefundedError(fallbackError)) throw fallbackError;
+                    log.warn("mercado_pago_refund_already_completed orderId={} fallback=true reconcilingOrder=true", orderId);
+                }
+            }
         }
-        verifyOrderReference(response, request.payment().merchantReference());
 
-        // La respuesta del endpoint de refund puede ser resumida. Consultamos la order
-        // nuevamente para normalizar estado e importe acumulado reembolsado.
+        // Consultamos la order completa para normalizar identidad, estado e importe
+        // acumulado reembolsado después de la operación.
         JsonNode order = exchange("GET", "/v1/orders/" + encodePath(orderId), settings.accessToken(), null, null);
         verifyOrderReference(order, request.payment().merchantReference());
         MappedStatus mapped = mapStatus(order);
@@ -187,6 +205,11 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
         // Orders puede devolver property_value solo dentro de errors[0]. Si el reason
         // conserva el detalle, refund_amount + pattern identifica igualmente este caso.
         return reason.contains("refund_amount") && reason.contains("pattern");
+    }
+
+    boolean isOrderAlreadyRefundedError(ResponseStatusException error) {
+        if (error == null || error.getReason() == null) return false;
+        return error.getReason().toLowerCase(Locale.ROOT).contains("order_already_refunded");
     }
 
     @Override

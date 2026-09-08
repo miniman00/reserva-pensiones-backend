@@ -44,4 +44,12 @@ class MercadoPagoRefundCompatibilityTest {
         assertThat(gateway.isRefundAmountPatternError(error)).isTrue();
     }
 
+    @Test
+    void recognizesAlreadyRefundedProviderResponseForSafeReconciliation() {
+        var error = new ResponseStatusException(HttpStatus.CONFLICT,
+                "Mercado Pago: order_already_refunded: Order already refunded");
+
+        assertThat(gateway.isOrderAlreadyRefundedError(error)).isTrue();
+    }
+
 }
