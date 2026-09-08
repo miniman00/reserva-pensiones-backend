@@ -303,7 +303,7 @@ public class OwnerEntitlementService {
         OwnerTrialLifecycle lifecycle = trialLifecycle.lifecycle(user.getId());
         if (lifecycle == null) {
             EffectiveTrialAccess trial = new EffectiveTrialAccess(
-                    "PENDING", true, false, false, false, null, null, null,
+                    "PENDING", true, false, false, false, null, null, null, null,
                     settings.getDurationDays(), settings.getGraceDays(), null, null);
             return Resolution.trial(EntitlementSource.TRIAL_PENDING, policy(configuredTrialPlan), trial);
         }
