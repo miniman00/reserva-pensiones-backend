@@ -67,7 +67,8 @@ class PaymentTransactionMarketplaceTest {
         service = new PaymentTransactionService(
                 payments, mock(PaymentStatusHistoryRepository.class), users, plans, planVersions, pensions,
                 promotionProducts, promotionVersions, studyCenters, subscriptions, promotions,
-                mock(PaymentFulfillmentService.class), paymentRuntime, mock(AdminAuditService.class));
+                mock(PaymentFulfillmentService.class), paymentRuntime, mock(AdminAuditService.class),
+                mock(uy.pensiones.realtime.RealtimeEventService.class));
 
         when(paymentRuntime.provider(PaymentProvider.MERCADO_PAGO)).thenReturn(
                 PaymentProviderConfig.builder().provider(PaymentProvider.MERCADO_PAGO).mode(PaymentProviderMode.SANDBOX).build());

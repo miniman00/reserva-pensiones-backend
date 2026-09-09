@@ -110,6 +110,7 @@ public class SecurityConfig {
                                 "/sitemap.xml", "/robots.txt",
                                 "/oauth2/**", "/login/**", "/media/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        .requestMatchers("/ws/**").authenticated()
 
                         // IMPORTANTE: antes de /api/**
                         .requestMatchers("/api/invites/*").permitAll()

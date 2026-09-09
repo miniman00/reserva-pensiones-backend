@@ -9,6 +9,7 @@ import uy.pensiones.model.*;
 import uy.pensiones.payment.PaymentGateway;
 import uy.pensiones.payment.PaymentRuntimeConfigurationService;
 import uy.pensiones.repo.*;
+import uy.pensiones.realtime.RealtimeEventService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -35,6 +36,7 @@ public class PaymentTransactionService {
     private final PaymentFulfillmentService fulfillment;
     private final PaymentRuntimeConfigurationService paymentRuntime;
     private final AdminAuditService audit;
+    private final RealtimeEventService realtimeEvents;
 
     public PaymentTransactionService(PaymentRepository payments, PaymentStatusHistoryRepository history,
                                      AdminSubscriptionUserRepository users, PlanRepository plans,
@@ -43,7 +45,8 @@ public class PaymentTransactionService {
                                      PromotionProductVersionRepository promotionVersions,
                                      StudyCenterCatalogRepository studyCenters,
                                      OwnerSubscriptionRepository subscriptions, PensionPromotionRepository promotions,
-                                     PaymentFulfillmentService fulfillment, PaymentRuntimeConfigurationService paymentRuntime, AdminAuditService audit) {
+                                     PaymentFulfillmentService fulfillment, PaymentRuntimeConfigurationService paymentRuntime,
+                                     AdminAuditService audit, RealtimeEventService realtimeEvents) {
         this.payments = payments;
         this.history = history;
         this.users = users;
@@ -58,6 +61,7 @@ public class PaymentTransactionService {
         this.fulfillment = fulfillment;
         this.paymentRuntime = paymentRuntime;
         this.audit = audit;
+        this.realtimeEvents = realtimeEvents;
     }
 
     @Transactional
@@ -396,6 +400,8 @@ public class PaymentTransactionService {
     private PaymentRecord applyStatus(PaymentRecord p, PaymentStatus target, String providerStatus, PaymentEventSource source, String note, boolean refundIncreased) {
         if (target == null) throw new IllegalArgumentException("El proveedor devolvió un estado nulo");
         PaymentStatus before = p.getStatus();
+        OffsetDateTime beforeFulfilledAt = p.getFulfilledAt();
+        Long beforeFulfilledSubscriptionId = p.getFulfilledSubscription() == null ? null : p.getFulfilledSubscription().getId();
         if (before != target && before.isTerminal()
                 && !(before == PaymentStatus.APPROVED && target == PaymentStatus.REFUNDED)) return p;
         p.setProviderStatus(providerStatus);
@@ -452,7 +458,40 @@ public class PaymentTransactionService {
                 }
             }
         }
-        return payments.save(p);
+        PaymentRecord saved = payments.save(p);
+        boolean fulfillmentChanged = !java.util.Objects.equals(beforeFulfilledAt, saved.getFulfilledAt())
+                || !java.util.Objects.equals(beforeFulfilledSubscriptionId,
+                saved.getFulfilledSubscription() == null ? null : saved.getFulfilledSubscription().getId());
+        if (statusChanged || fulfillmentChanged || refundIncreased) {
+            publishRealtimeChanges(saved, statusChanged, fulfillmentChanged);
+        }
+        return saved;
+    }
+
+    private void publishRealtimeChanges(PaymentRecord payment, boolean statusChanged, boolean fulfillmentChanged) {
+        if (payment == null || payment.getUser() == null || payment.getUser().getId() == null || realtimeEvents == null) return;
+        Map<String, Object> paymentData = new LinkedHashMap<>();
+        paymentData.put("status", payment.getStatus() == null ? null : payment.getStatus().name());
+        paymentData.put("purpose", payment.getPurpose() == null ? null : payment.getPurpose().name());
+        paymentData.put("benefitApplied", payment.getFulfilledAt() != null);
+        paymentData.put("fulfillmentPending", payment.getStatus() == PaymentStatus.APPROVED && payment.getFulfilledAt() == null);
+        paymentData.put("providerStatus", payment.getProviderStatus());
+        paymentData.put("statusChanged", statusChanged);
+        realtimeEvents.publishToUser(payment.getUser().getId(), "PAYMENT_STATUS_CHANGED", payment.getId(), paymentData);
+
+        if (payment.getPurpose() == PaymentPurpose.SUBSCRIPTION
+                && (fulfillmentChanged || payment.getStatus() == PaymentStatus.REFUNDED)) {
+            Map<String, Object> subscriptionData = new LinkedHashMap<>();
+            OwnerSubscription subscription = payment.getFulfilledSubscription();
+            subscriptionData.put("paymentId", payment.getId());
+            subscriptionData.put("subscriptionId", subscription == null ? null : subscription.getId());
+            subscriptionData.put("status", subscription == null || subscription.getStatus() == null
+                    ? (payment.getStatus() == PaymentStatus.REFUNDED ? "CANCELLED" : null)
+                    : subscription.getStatus().name());
+            subscriptionData.put("reason", payment.getStatus() == PaymentStatus.REFUNDED ? "FULL_REFUND" : "PAYMENT_FULFILLMENT");
+            realtimeEvents.publishToUser(payment.getUser().getId(), "SUBSCRIPTION_CHANGED",
+                    subscription == null ? null : subscription.getId(), subscriptionData);
+        }
     }
 
     private boolean updateProviderRefundedAmount(PaymentRecord payment, BigDecimal providerAmount) {
