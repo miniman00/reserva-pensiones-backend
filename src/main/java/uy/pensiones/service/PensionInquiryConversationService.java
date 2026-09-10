@@ -10,6 +10,7 @@ import uy.pensiones.enums.NotificationType;
 import uy.pensiones.model.PensionInquiry;
 import uy.pensiones.model.PensionInquiryMessage;
 import uy.pensiones.model.User;
+import uy.pensiones.realtime.RealtimeEventService;
 import uy.pensiones.repo.PensionInquiryMessageRepository;
 import uy.pensiones.repo.PensionInquiryRepository;
 import uy.pensiones.security.Authz;
@@ -32,15 +33,18 @@ public class PensionInquiryConversationService {
     private final PensionInquiryMessageRepository messages;
     private final Authz authz;
     private final NotificationService notifications;
+    private final RealtimeEventService realtimeEvents;
 
     public PensionInquiryConversationService(PensionInquiryRepository inquiries,
                                              PensionInquiryMessageRepository messages,
                                              Authz authz,
-                                             NotificationService notifications) {
+                                             NotificationService notifications,
+                                             RealtimeEventService realtimeEvents) {
         this.inquiries = inquiries;
         this.messages = messages;
         this.authz = authz;
         this.notifications = notifications;
+        this.realtimeEvents = realtimeEvents;
     }
 
     @Transactional(readOnly = true)
@@ -60,7 +64,13 @@ public class PensionInquiryConversationService {
     @Transactional
     public void markRead(Long inquiryId, User me) {
         loadParticipantInquiry(inquiryId, me);
-        messages.markUnreadAsRead(inquiryId, me.getId(), OffsetDateTime.now());
+        int updated = messages.markUnreadAsRead(inquiryId, me.getId(), OffsetDateTime.now());
+        if (updated > 0) {
+            realtimeEvents.publishToUser(me.getId(), "INQUIRY_UNREAD_CHANGED", inquiryId, Map.of(
+                    "inquiryId", inquiryId,
+                    "reason", "READ"
+            ));
+        }
     }
 
     @Transactional(readOnly = true)
@@ -130,7 +140,33 @@ public class PensionInquiryConversationService {
                 .build());
 
         notifyCounterpart(inquiry, role, recipient);
+        publishConversationChanged(inquiry, me, recipient, saved, role);
         return new PensionInquiryMessageSendResponse(PensionInquiryMessageDTO.of(saved), inquiry.getStatus());
+    }
+
+
+    private void publishConversationChanged(PensionInquiry inquiry,
+                                            User sender,
+                                            User recipient,
+                                            PensionInquiryMessage message,
+                                            InquiryMessageSenderRole role) {
+        if (realtimeEvents == null || inquiry == null || inquiry.getId() == null || message == null) return;
+        Map<String, Object> data = Map.of(
+                "inquiryId", inquiry.getId(),
+                "messageId", message.getId(),
+                "status", inquiry.getStatus() == null ? "" : inquiry.getStatus().name(),
+                "senderRole", role == null ? "" : role.name()
+        );
+        if (sender != null && sender.getId() != null) {
+            realtimeEvents.publishToUser(sender.getId(), "INQUIRY_CONVERSATION_CHANGED", inquiry.getId(), data);
+        }
+        if (recipient != null && recipient.getId() != null) {
+            realtimeEvents.publishToUser(recipient.getId(), "INQUIRY_CONVERSATION_CHANGED", inquiry.getId(), data);
+            realtimeEvents.publishToUser(recipient.getId(), "INQUIRY_UNREAD_CHANGED", inquiry.getId(), Map.of(
+                    "inquiryId", inquiry.getId(),
+                    "reason", "MESSAGE_RECEIVED"
+            ));
+        }
     }
 
     private PensionInquiry loadParticipantInquiry(Long inquiryId, User me) {

@@ -8,12 +8,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import uy.pensiones.model.User;
+import uy.pensiones.realtime.RealtimeEventService;
 import uy.pensiones.repo.UserNotificationRepository;
 import uy.pensiones.repo.UserRepository;
 import uy.pensiones.web.dto.UserNotificationDTO;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/notifications")
@@ -23,10 +25,14 @@ public class NotificationController {
 
     private final UserNotificationRepository notifications;
     private final UserRepository users;
+    private final RealtimeEventService realtimeEvents;
 
-    public NotificationController(UserNotificationRepository notifications, UserRepository users) {
+    public NotificationController(UserNotificationRepository notifications,
+                                  UserRepository users,
+                                  RealtimeEventService realtimeEvents) {
         this.notifications = notifications;
         this.users = users;
+        this.realtimeEvents = realtimeEvents;
     }
 
     @GetMapping
@@ -55,15 +61,26 @@ public class NotificationController {
         if (notification.getReadAt() == null) {
             notification.setReadAt(OffsetDateTime.now());
             notification = notifications.save(notification);
+            publishReadState(me.getId(), notification.getId());
         }
         return UserNotificationDTO.of(notification);
     }
 
+    @Transactional
     @PostMapping("/read-all")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markAllRead(@AuthenticationPrincipal OAuth2User principal) {
         User me = current(principal);
-        notifications.markAllRead(me.getId(), OffsetDateTime.now());
+        int updated = notifications.markAllRead(me.getId(), OffsetDateTime.now());
+        if (updated > 0) publishReadState(me.getId(), null);
+    }
+
+    private void publishReadState(Long userId, Long notificationId) {
+        if (realtimeEvents == null || userId == null) return;
+        realtimeEvents.publishToUser(userId, "NOTIFICATIONS_READ_CHANGED", notificationId, Map.of(
+                "notificationId", notificationId == null ? 0L : notificationId,
+                "unreadCount", notifications.countByUserIdAndReadAtIsNull(userId)
+        ));
     }
 
     private User current(OAuth2User principal) {

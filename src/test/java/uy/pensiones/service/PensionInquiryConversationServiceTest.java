@@ -12,6 +12,7 @@ import uy.pensiones.model.Pension;
 import uy.pensiones.model.PensionInquiry;
 import uy.pensiones.model.PensionInquiryMessage;
 import uy.pensiones.model.User;
+import uy.pensiones.realtime.RealtimeEventService;
 import uy.pensiones.repo.PensionInquiryMessageRepository;
 import uy.pensiones.repo.PensionInquiryRepository;
 import uy.pensiones.security.Authz;
@@ -30,6 +31,7 @@ class PensionInquiryConversationServiceTest {
     private PensionInquiryMessageRepository messages;
     private Authz authz;
     private NotificationService notifications;
+    private RealtimeEventService realtimeEvents;
     private PensionInquiryConversationService service;
 
     @BeforeEach
@@ -38,7 +40,8 @@ class PensionInquiryConversationServiceTest {
         messages = mock(PensionInquiryMessageRepository.class);
         authz = mock(Authz.class);
         notifications = mock(NotificationService.class);
-        service = new PensionInquiryConversationService(inquiries, messages, authz, notifications);
+        realtimeEvents = mock(RealtimeEventService.class);
+        service = new PensionInquiryConversationService(inquiries, messages, authz, notifications, realtimeEvents);
     }
 
     @Test
@@ -94,6 +97,8 @@ class PensionInquiryConversationServiceTest {
                 anyString(),
                 eq("/profile/sent-inquiries?inquiryId=10")
         );
+        verify(realtimeEvents).publishToUser(eq(7L), eq("INQUIRY_CONVERSATION_CHANGED"), eq(10L), anyMap());
+        verify(realtimeEvents).publishToUser(eq(7L), eq("INQUIRY_UNREAD_CHANGED"), eq(10L), anyMap());
     }
 
     @Test
@@ -126,6 +131,8 @@ class PensionInquiryConversationServiceTest {
                 anyString(),
                 eq("/profile/inquiries?inquiryId=10")
         );
+        verify(realtimeEvents).publishToUser(eq(2L), eq("INQUIRY_CONVERSATION_CHANGED"), eq(10L), anyMap());
+        verify(realtimeEvents).publishToUser(eq(2L), eq("INQUIRY_UNREAD_CHANGED"), eq(10L), anyMap());
     }
 
     @Test
@@ -133,10 +140,12 @@ class PensionInquiryConversationServiceTest {
         User requester = user(7L);
         PensionInquiry inquiry = inquiry(10L, requester, InquiryStatus.CONTACTED);
         when(inquiries.findConversationById(10L)).thenReturn(Optional.of(inquiry));
+        when(messages.markUnreadAsRead(eq(10L), eq(7L), any(OffsetDateTime.class))).thenReturn(2);
 
         service.markRead(10L, requester);
 
         verify(messages).markUnreadAsRead(eq(10L), eq(7L), any(OffsetDateTime.class));
+        verify(realtimeEvents).publishToUser(eq(7L), eq("INQUIRY_UNREAD_CHANGED"), eq(10L), anyMap());
     }
 
     @Test
