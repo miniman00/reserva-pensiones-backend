@@ -6,6 +6,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.HtmlUtils;
 import uy.pensiones.service.MailOutboxService;
 
 import java.math.BigDecimal;
@@ -100,7 +101,7 @@ class MailServiceBrandingTest {
         assertTrue(html.getValue().contains("Plan anterior"));
         assertTrue(html.getValue().contains("Esencial"));
         assertTrue(html.getValue().contains("Tus beneficios"));
-        assertTrue(html.getValue().contains("Analítica avanzada"));
+        assertTrue(HtmlUtils.htmlUnescape(html.getValue()).contains("Analítica avanzada"));
         assertTrue(html.getValue().contains("$ 1.290,00 UYU"));
     }
 }

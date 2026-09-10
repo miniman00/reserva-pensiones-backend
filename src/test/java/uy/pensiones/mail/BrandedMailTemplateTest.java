@@ -1,6 +1,7 @@
 package uy.pensiones.mail;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.web.util.HtmlUtils;
 
 import java.util.List;
 
@@ -48,6 +49,8 @@ class BrandedMailTemplateTest {
 
         assertTrue(summary.contains("Pro &lt;script&gt;"));
         assertFalse(summary.contains("Pro <script>"));
-        assertTrue(benefits.contains("Analítica &lt;avanzada&gt;"));
+        assertTrue(benefits.contains("&lt;avanzada&gt;"));
+        assertFalse(benefits.contains("<avanzada>"));
+        assertTrue(HtmlUtils.htmlUnescape(benefits).contains("Analítica <avanzada>"));
     }
 }
