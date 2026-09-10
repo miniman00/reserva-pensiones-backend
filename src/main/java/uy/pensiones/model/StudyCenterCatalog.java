@@ -32,6 +32,9 @@ public class StudyCenterCatalog {
     @Column(length = 100)
     private String city;
 
+    @Column(length = 220)
+    private String address;
+
     private Double lat;
     private Double lng;
 

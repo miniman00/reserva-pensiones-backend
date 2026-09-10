@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 public record StudyCenterCatalogUpdateRequest(
         @NotBlank @Size(max = 140) String name,
         @Size(max = 100) String city,
+        @Size(max = 220) String address,
         @Size(max = 2) @Pattern(regexp = "^$|^[A-Za-z]{2}$", message = "El país debe ser un código ISO de 2 letras") String countryCode,
         Double lat,
         Double lng,

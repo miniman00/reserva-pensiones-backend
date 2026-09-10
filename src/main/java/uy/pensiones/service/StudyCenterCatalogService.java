@@ -194,6 +194,7 @@ public class StudyCenterCatalogService {
                 .name(name)
                 .normalizedName(key)
                 .city(clean(request.city()))
+                .address(clean(request.address()))
                 .countryCode(cleanCountry(request.countryCode()))
                 .lat(request.lat())
                 .lng(request.lng())
@@ -226,6 +227,7 @@ public class StudyCenterCatalogService {
         target.setName(name);
         target.setNormalizedName(key);
         target.setCity(clean(request.city()));
+        target.setAddress(clean(request.address()));
         target.setCountryCode(cleanCountry(request.countryCode()));
         target.setLat(request.lat());
         target.setLng(request.lng());
@@ -294,7 +296,7 @@ public class StudyCenterCatalogService {
 
     private AdminStudyCenterDTO adminDto(AdminStudyCenterQueryRepository.AdminStudyCenterRow row) {
         return new AdminStudyCenterDTO(
-                row.getId(), row.getName(), row.getCity(), row.getCountryCode(), row.getLat(), row.getLng(),
+                row.getId(), row.getName(), row.getCity(), row.getAddress(), row.getCountryCode(), row.getLat(), row.getLng(),
                 Boolean.TRUE.equals(row.getVerified()), Boolean.TRUE.equals(row.getActive()),
                 row.getLat() != null && row.getLng() != null,
                 safe(row.getUsageCount()), safe(row.getPublishedPensionCount()), safe(row.getVisiblePensionCount()),
@@ -307,7 +309,7 @@ public class StudyCenterCatalogService {
         long published = publishedLinkedCount(center.getNormalizedName(), false);
         long visible = publishedLinkedCount(center.getNormalizedName(), true);
         return new AdminStudyCenterDTO(
-                center.getId(), center.getName(), center.getCity(), center.getCountryCode(), center.getLat(), center.getLng(),
+                center.getId(), center.getName(), center.getCity(), center.getAddress(), center.getCountryCode(), center.getLat(), center.getLng(),
                 Boolean.TRUE.equals(center.getVerified()), Boolean.TRUE.equals(center.getActive()),
                 center.getLat() != null && center.getLng() != null,
                 usage, published, visible, center.getCreatedAt(), center.getUpdatedAt()
@@ -321,17 +323,24 @@ public class StudyCenterCatalogService {
     }
 
     private long publishedLinkedCount(String key, boolean onlyVisible) {
+        Long value = jdbc.queryForObject(publishedLinkedCountSql(onlyVisible), Long.class, key);
+        return safe(value);
+    }
+
+    static String publishedLinkedCountSql(boolean onlyVisible) {
         String visibility = onlyVisible
                 ? " AND COALESCE(p.moderation_blocked, false) = false AND COALESCE(u.suspended, false) = false"
                 : "";
-        Long value = jdbc.queryForObject("""
+        return """
                 SELECT COUNT(DISTINCT p.id)
                 FROM pension_study_centers psc
                 JOIN pensions p ON p.id = psc.pension_id
                 LEFT JOIN users u ON u.id = COALESCE(p.owner_id, p.created_by_id)
-                WHERE """ + ASSOCIATION_NORMALIZATION_SQL.replace("study_center", "psc.study_center")
-                + " = ? AND p.status = 'PUBLISHED'" + visibility, Long.class, key);
-        return safe(value);
+                WHERE %s = ? AND p.status = 'PUBLISHED'%s
+                """.formatted(
+                ASSOCIATION_NORMALIZATION_SQL.replace("study_center", "psc.study_center"),
+                visibility
+        );
     }
 
     private AdminStudyCenterDistanceDTO distanceDto(StudyCenterCatalog center) {
@@ -369,6 +378,7 @@ public class StudyCenterCatalogService {
         out.put("name", center.getName());
         out.put("normalizedName", center.getNormalizedName());
         out.put("city", center.getCity());
+        out.put("address", center.getAddress());
         out.put("countryCode", center.getCountryCode());
         out.put("lat", center.getLat());
         out.put("lng", center.getLng());
@@ -407,7 +417,7 @@ public class StudyCenterCatalogService {
     }
 
     public record AdminStudyCenterDTO(
-            Long id, String name, String city, String countryCode, Double lat, Double lng,
+            Long id, String name, String city, String address, String countryCode, Double lat, Double lng,
             boolean verified, boolean active, boolean geolocated,
             long usageCount, long publishedPensionCount, long visiblePensionCount,
             OffsetDateTime createdAt, OffsetDateTime updatedAt

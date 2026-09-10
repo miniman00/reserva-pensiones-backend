@@ -17,6 +17,7 @@ public interface AdminStudyCenterQueryRepository extends Repository<StudyCenterC
             SELECT sc.id AS "id",
                    sc.name AS "name",
                    sc.city AS "city",
+                   sc.address AS "address",
                    sc.country_code AS "countryCode",
                    sc.lat AS "lat",
                    sc.lng AS "lng",
@@ -37,7 +38,8 @@ public interface AdminStudyCenterQueryRepository extends Repository<StudyCenterC
             LEFT JOIN pensions p ON p.id = psc.pension_id
             LEFT JOIN users owner_user ON owner_user.id = COALESCE(p.owner_id, p.created_by_id)
             WHERE (:q = '' OR LOWER(sc.name) LIKE LOWER(CONCAT('%', :q, '%'))
-                   OR LOWER(COALESCE(sc.city, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+                   OR LOWER(COALESCE(sc.city, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(COALESCE(sc.address, '')) LIKE LOWER(CONCAT('%', :q, '%')))
               AND (:active IS NULL OR sc.active = :active)
               AND (:verified IS NULL OR sc.verified = :verified)
               AND (:geolocated IS NULL
@@ -50,7 +52,8 @@ public interface AdminStudyCenterQueryRepository extends Repository<StudyCenterC
             SELECT COUNT(*)
             FROM study_center_catalog sc
             WHERE (:q = '' OR LOWER(sc.name) LIKE LOWER(CONCAT('%', :q, '%'))
-                   OR LOWER(COALESCE(sc.city, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+                   OR LOWER(COALESCE(sc.city, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(COALESCE(sc.address, '')) LIKE LOWER(CONCAT('%', :q, '%')))
               AND (:active IS NULL OR sc.active = :active)
               AND (:verified IS NULL OR sc.verified = :verified)
               AND (:geolocated IS NULL
@@ -124,6 +127,7 @@ public interface AdminStudyCenterQueryRepository extends Repository<StudyCenterC
         Long getId();
         String getName();
         String getCity();
+        String getAddress();
         String getCountryCode();
         Double getLat();
         Double getLng();
