@@ -9,6 +9,7 @@ import uy.pensiones.enums.PaymentRefundStatus;
 import uy.pensiones.enums.PaymentStatus;
 import uy.pensiones.model.PaymentProviderConfig;
 import uy.pensiones.model.PaymentProviderCredential;
+import uy.pensiones.model.PaymentProviderEnvironmentCheck;
 import uy.pensiones.model.PaymentSettings;
 import uy.pensiones.payment.MercadoPagoPaymentGateway;
 import uy.pensiones.payment.PaymentRuntimeConfigurationService;
@@ -17,6 +18,7 @@ import uy.pensiones.repo.PaymentChargebackRepository;
 import uy.pensiones.repo.PaymentProviderConfigRepository;
 import uy.pensiones.repo.PaymentProviderCredentialRepository;
 import uy.pensiones.repo.PaymentProviderEventRepository;
+import uy.pensiones.repo.PaymentProviderEnvironmentCheckRepository;
 import uy.pensiones.repo.PaymentRefundRepository;
 import uy.pensiones.repo.PaymentRepository;
 
@@ -33,6 +35,7 @@ class MercadoPagoReadinessServiceTest {
     private final PaymentSecretCrypto crypto = mock(PaymentSecretCrypto.class);
     private final PaymentProviderConfigRepository providers = mock(PaymentProviderConfigRepository.class);
     private final PaymentProviderCredentialRepository credentials = mock(PaymentProviderCredentialRepository.class);
+    private final PaymentProviderEnvironmentCheckRepository environmentChecks = mock(PaymentProviderEnvironmentCheckRepository.class);
     private final PaymentRepository payments = mock(PaymentRepository.class);
     private final PaymentProviderEventRepository events = mock(PaymentProviderEventRepository.class);
     private final PaymentRefundRepository refunds = mock(PaymentRefundRepository.class);
@@ -43,7 +46,7 @@ class MercadoPagoReadinessServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new MercadoPagoReadinessService(runtime, crypto, providers, credentials, payments, events,
+        service = new MercadoPagoReadinessService(runtime, crypto, providers, credentials, environmentChecks, payments, events,
                 refunds, chargebacks, new ObjectMapper());
         settings = PaymentSettings.builder()
                 .id((short) 1)
@@ -69,10 +72,15 @@ class MercadoPagoReadinessServiceTest {
         when(crypto.isReady()).thenReturn(true);
         when(providers.findById(PaymentProvider.MERCADO_PAGO)).thenReturn(Optional.of(provider));
         PaymentProviderCredential credential = mock(PaymentProviderCredential.class);
+        when(credential.getFingerprint()).thenReturn("live-fingerprint");
         when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN))
                 .thenReturn(Optional.of(credential));
         when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.LIVE_WEBHOOK_SECRET))
                 .thenReturn(Optional.of(credential));
+        when(environmentChecks.findByProviderAndMode(PaymentProvider.MERCADO_PAGO, PaymentProviderMode.LIVE))
+                .thenReturn(Optional.of(PaymentProviderEnvironmentCheck.builder()
+                        .provider(PaymentProvider.MERCADO_PAGO).mode(PaymentProviderMode.LIVE)
+                        .credentialFingerprint("live-fingerprint").success(true).build()));
     }
 
     @Test
@@ -187,4 +195,31 @@ class MercadoPagoReadinessServiceTest {
         assertThat(result.liveConfigurationReady()).isTrue();
         assertThat(result.automaticLiveReady()).isFalse();
     }
+    @Test
+    void productionCanBePreparedAndVerifiedWhileSandboxRemainsActive() {
+        provider.setMode(PaymentProviderMode.SANDBOX);
+        settings.setPaymentsEnabled(false);
+
+        var result = service.get();
+
+        assertThat(result.preLiveProductionReady()).isTrue();
+        assertThat(result.liveAccessTokenVerified()).isTrue();
+        assertThat(result.automaticLiveReady()).isFalse();
+        assertThat(result.checks().stream().filter(c -> c.code().equals("LIVE_MODE")).findFirst().orElseThrow().status())
+                .isEqualTo("FAIL");
+    }
+
+    @Test
+    void rotatedLiveTokenInvalidatesStoredVerification() {
+        PaymentProviderCredential rotated = mock(PaymentProviderCredential.class);
+        when(rotated.getFingerprint()).thenReturn("new-live-fingerprint");
+        when(credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO, MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN))
+                .thenReturn(Optional.of(rotated));
+
+        var result = service.get();
+
+        assertThat(result.liveAccessTokenVerified()).isFalse();
+        assertThat(result.preLiveProductionReady()).isFalse();
+    }
+
 }

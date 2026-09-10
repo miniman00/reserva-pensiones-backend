@@ -144,6 +144,10 @@ app:
     enabled: ${APP_MAIL_ENABLED:false}
     provider: ${APP_MAIL_PROVIDER:smtp}
     from: ${APP_MAIL_FROM:${SPRING_MAIL_USERNAME:${MAIL_USERNAME:no-reply@codevaru.com}}}
+    support-email: ${APP_MAIL_SUPPORT_EMAIL:soporte@codevaru.com}
+    brand:
+      # Si queda vacío, se usa ${app.frontend-url}/brand/pensions-portal-mark.png
+      logo-url: ${APP_MAIL_BRAND_LOGO_URL:}
     brevo:
       api-key: ${APP_BREVO_API_KEY:}
       endpoint: ${APP_BREVO_ENDPOINT:https://api.brevo.com/v3/smtp/email}

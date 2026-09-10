@@ -70,6 +70,7 @@ class MercadoPagoCertificationServiceTest {
         when(payments.countByProviderAndProviderModeAndStatusAndFulfilledAtIsNotNullAndCreatedAtGreaterThanEqual(eq(PaymentProvider.MERCADO_PAGO), eq(PaymentProviderMode.SANDBOX), eq(PaymentStatus.APPROVED), any())).thenReturn(1L);
         when(events.countByProviderAndProcessedAtIsNotNullAndLiveModeAndCreatedAtGreaterThanEqual(eq(PaymentProvider.MERCADO_PAGO), eq(false), any())).thenReturn(1L);
         when(runs.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(readiness.get()).thenReturn(readiness(false, true));
 
         var result = service.validatePreLive(10L, "sandbox validado", actor);
 
@@ -188,7 +189,7 @@ class MercadoPagoCertificationServiceTest {
     }
 
     private MercadoPagoReadinessService.ReadinessDTO readiness(boolean automatic, boolean config) {
-        return new MercadoPagoReadinessService.ReadinessDTO("TEST", automatic, config, false, false,
+        return new MercadoPagoReadinessService.ReadinessDTO("TEST", automatic, config, config, config, false, false,
                 provider == null ? PaymentProviderMode.SANDBOX : provider.getMode(), OffsetDateTime.now(),
                 new MercadoPagoReadinessService.EvidenceDTO(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null), List.of());
     }

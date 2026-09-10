@@ -22,6 +22,7 @@ public class AdminPaymentProviderService {
     private final PaymentSettingsRepository settings;
     private final PaymentProviderConfigRepository providers;
     private final PaymentProviderCredentialRepository credentials;
+    private final PaymentProviderEnvironmentCheckRepository environmentChecks;
     private final PaymentRuntimeConfigurationService runtime;
     private final PaymentGatewayRegistry registry;
     private final PaymentSecretCrypto crypto;
@@ -34,6 +35,7 @@ public class AdminPaymentProviderService {
     public AdminPaymentProviderService(PaymentSettingsRepository settings,
                                        PaymentProviderConfigRepository providers,
                                        PaymentProviderCredentialRepository credentials,
+                                       PaymentProviderEnvironmentCheckRepository environmentChecks,
                                        PaymentRuntimeConfigurationService runtime,
                                        PaymentGatewayRegistry registry,
                                        PaymentSecretCrypto crypto,
@@ -42,7 +44,7 @@ public class AdminPaymentProviderService {
                                        PaymentProviderConfigWriter writer,
                                        PaymentOperationalAlertNotificationRepository alertNotifications,
                                        PaymentOperationalAlertEmailService alertEmailService) {
-        this.settings=settings; this.providers=providers; this.credentials=credentials; this.runtime=runtime;
+        this.settings=settings; this.providers=providers; this.credentials=credentials; this.environmentChecks=environmentChecks; this.runtime=runtime;
         this.registry=registry; this.crypto=crypto; this.audit=audit; this.objectMapper=objectMapper; this.writer=writer;
         this.alertNotifications=alertNotifications; this.alertEmailService=alertEmailService;
     }
@@ -265,16 +267,67 @@ public class AdminPaymentProviderService {
         return dto(runtime.provider(provider));
     }
 
+    @Transactional
     public ProviderDTO testConnection(PaymentProvider provider, BackofficeUser actor) {
+        PaymentProviderConfig config = runtime.provider(requireProvider(provider));
+        return testConnection(provider, config.getMode(), actor, true);
+    }
+
+    @Transactional
+    public ProviderDTO testConnection(PaymentProvider provider, PaymentProviderMode mode, BackofficeUser actor) {
+        return testConnection(provider, mode, actor, false);
+    }
+
+    private ProviderDTO testConnection(PaymentProvider provider, PaymentProviderMode mode, BackofficeUser actor,
+                                       boolean updateLegacyActiveModeCheck) {
         provider = requireProvider(provider);
-        if (provider == PaymentProvider.MOCK && runtime.isProd()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "MOCK está prohibido en producción");
+        PaymentProviderConfig config = runtime.provider(provider);
+        if (provider == PaymentProvider.MOCK && runtime.isProd()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "MOCK está prohibido en producción");
+        }
+        if (provider == PaymentProvider.MERCADO_PAGO) {
+            if (mode == null || mode == PaymentProviderMode.TEST) throw bad("Mercado Pago solo admite SANDBOX o LIVE");
+        } else if (mode != null && mode != config.getMode()) {
+            throw bad("La prueba por ambiente separado solo está disponible para Mercado Pago");
+        }
+
         PaymentGateway gateway;
         try { gateway = registry.requireImplemented(provider); }
         catch (IllegalStateException e) { throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage()); }
         PaymentGateway.ConnectionTestResult result;
-        try { result = gateway.testConnection(); }
-        catch (Exception e) { result = new PaymentGateway.ConnectionTestResult(false, safeMessage(e)); }
-        writer.recordConnectionTest(provider, result.success(), result.message(), actor);
+        try {
+            result = provider == PaymentProvider.MERCADO_PAGO
+                    ? ((MercadoPagoPaymentGateway) gateway).testConnection(mode)
+                    : gateway.testConnection();
+        } catch (Exception e) {
+            result = new PaymentGateway.ConnectionTestResult(false, safeMessage(e));
+        }
+
+        if (provider == PaymentProvider.MERCADO_PAGO) {
+            String accessTokenName = MercadoPagoPaymentGateway.accessTokenCredentialName(mode);
+            String fingerprint = credentials.findByProviderAndCredentialName(provider, accessTokenName)
+                    .map(PaymentProviderCredential::getFingerprint).orElse(null);
+            PaymentProviderEnvironmentCheck before = environmentChecks.findByProviderAndMode(provider, mode).orElse(null);
+            PaymentProviderEnvironmentCheck check = before == null
+                    ? PaymentProviderEnvironmentCheck.builder().provider(provider).mode(mode).build()
+                    : before;
+            Map<String,Object> beforeSnapshot = environmentCheckSnapshot(before);
+            check.setCredentialFingerprint(fingerprint);
+            check.setCheckedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            check.setSuccess(result.success());
+            check.setMessage(trim(result.message(), 500));
+            check.setCheckedByBackoffice(actor);
+            environmentChecks.save(check);
+            if (!(updateLegacyActiveModeCheck || mode == config.getMode())) {
+                audit.record(actor, AdminAuditAction.ADMIN_TEST_PAYMENT_PROVIDER_CONNECTION,
+                        AdminAuditEntityType.PAYMENT_PROVIDER, provider.name() + ":" + mode.name(),
+                        beforeSnapshot, environmentCheckSnapshot(check), null);
+            }
+        }
+
+        if (updateLegacyActiveModeCheck || mode == config.getMode()) {
+            writer.recordConnectionTest(provider, result.success(), result.message(), actor);
+        }
         return dto(runtime.provider(provider));
     }
 
@@ -294,7 +347,27 @@ public class AdminPaymentProviderService {
                 p.isSubscriptionsEnabled(), p.isPromotionsEnabled(), split(p.getSupportedCurrencies()), split(p.getSupportedCountries()),
                 p.getConfigurationJson(), registry.isImplemented(p.getProvider()), p.getProvider()==PaymentProvider.MOCK,
                 available, status, p.getLastConnectivityCheckAt(), p.getLastConnectivityCheckSuccess(), p.getLastConnectivityCheckMessage(),
-                p.getLastWebhookAt(), cs);
+                p.getLastWebhookAt(), cs, environmentCheckDtos(p.getProvider()));
+    }
+
+    private List<EnvironmentCheckDTO> environmentCheckDtos(PaymentProvider provider) {
+        if (provider != PaymentProvider.MERCADO_PAGO) return List.of();
+        return List.of(environmentCheckDto(provider, PaymentProviderMode.SANDBOX),
+                environmentCheckDto(provider, PaymentProviderMode.LIVE));
+    }
+
+    private EnvironmentCheckDTO environmentCheckDto(PaymentProvider provider, PaymentProviderMode mode) {
+        String accessTokenName = MercadoPagoPaymentGateway.accessTokenCredentialName(mode);
+        String webhookSecretName = MercadoPagoPaymentGateway.webhookSecretCredentialName(mode);
+        PaymentProviderCredential accessToken = credentials.findByProviderAndCredentialName(provider, accessTokenName).orElse(null);
+        boolean webhookConfigured = credentials.findByProviderAndCredentialName(provider, webhookSecretName).isPresent();
+        PaymentProviderEnvironmentCheck check = environmentChecks.findByProviderAndMode(provider, mode).orElse(null);
+        boolean credentialCurrent = check != null && accessToken != null && check.getCredentialFingerprint() != null
+                && check.getCredentialFingerprint().equals(accessToken.getFingerprint());
+        boolean verified = credentialCurrent && check.isSuccess();
+        return new EnvironmentCheckDTO(mode, accessToken != null, webhookConfigured, verified, credentialCurrent,
+                check == null ? null : check.getCheckedAt(), check == null ? null : check.isSuccess(),
+                check == null ? null : check.getMessage());
     }
 
     private OperationalAlertEmailConfigDTO operationalAlerts(PaymentSettings s) {
@@ -396,6 +469,24 @@ public class AdminPaymentProviderService {
             return null;
         }
     }
+    private Map<String,Object> environmentCheckSnapshot(PaymentProviderEnvironmentCheck check) {
+        if (check == null) return null;
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("provider", check.getProvider());
+        result.put("mode", check.getMode());
+        result.put("credentialFingerprint", check.getCredentialFingerprint());
+        result.put("checkedAt", check.getCheckedAt());
+        result.put("success", check.isSuccess());
+        result.put("message", check.getMessage());
+        return result;
+    }
+
+    private String trim(String value, int max) {
+        if (value == null) return null;
+        String x = value.trim();
+        return x.length() <= max ? x : x.substring(0, max);
+    }
+
     private void rejectSecretLikeKeys(JsonNode node) {
         if (node == null) return;
         if (node.isObject()) {
@@ -429,8 +520,12 @@ public class AdminPaymentProviderService {
                               List<String> supportedCurrencies, List<String> supportedCountries, String configurationJson,
                               boolean implemented, boolean mock, boolean availableForNewPayments, String operationalStatus,
                               OffsetDateTime lastConnectivityCheckAt, Boolean lastConnectivityCheckSuccess,
-                              String lastConnectivityCheckMessage, OffsetDateTime lastWebhookAt, List<CredentialDTO> credentials) {}
+                              String lastConnectivityCheckMessage, OffsetDateTime lastWebhookAt, List<CredentialDTO> credentials,
+                              List<EnvironmentCheckDTO> environmentChecks) {}
     public record CredentialDTO(String name, String fingerprint, String maskedSuffix, OffsetDateTime updatedAt) {}
+    public record EnvironmentCheckDTO(PaymentProviderMode mode, boolean accessTokenConfigured,
+                                      boolean webhookSecretConfigured, boolean accessTokenVerified,
+                                      boolean credentialCurrent, OffsetDateTime checkedAt, Boolean success, String message) {}
     public record ProviderUpdate(String displayName, boolean enabled, PaymentProviderMode mode, int priority,
                                  boolean subscriptionsEnabled, boolean promotionsEnabled, List<String> supportedCurrencies,
                                  List<String> supportedCountries, String configurationJson, String reason) {}

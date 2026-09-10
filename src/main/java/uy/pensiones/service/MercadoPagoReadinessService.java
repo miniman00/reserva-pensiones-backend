@@ -9,6 +9,8 @@ import uy.pensiones.enums.PaymentProviderMode;
 import uy.pensiones.enums.PaymentRefundStatus;
 import uy.pensiones.enums.PaymentStatus;
 import uy.pensiones.model.PaymentProviderConfig;
+import uy.pensiones.model.PaymentProviderCredential;
+import uy.pensiones.model.PaymentProviderEnvironmentCheck;
 import uy.pensiones.model.PaymentSettings;
 import uy.pensiones.payment.MercadoPagoPaymentGateway;
 import uy.pensiones.payment.PaymentRuntimeConfigurationService;
@@ -17,6 +19,7 @@ import uy.pensiones.repo.PaymentChargebackRepository;
 import uy.pensiones.repo.PaymentProviderConfigRepository;
 import uy.pensiones.repo.PaymentProviderCredentialRepository;
 import uy.pensiones.repo.PaymentProviderEventRepository;
+import uy.pensiones.repo.PaymentProviderEnvironmentCheckRepository;
 import uy.pensiones.repo.PaymentRefundRepository;
 import uy.pensiones.repo.PaymentRepository;
 
@@ -27,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Service
 public class MercadoPagoReadinessService {
@@ -39,6 +43,7 @@ public class MercadoPagoReadinessService {
     private final PaymentSecretCrypto crypto;
     private final PaymentProviderConfigRepository providers;
     private final PaymentProviderCredentialRepository credentials;
+    private final PaymentProviderEnvironmentCheckRepository environmentChecks;
     private final PaymentRepository payments;
     private final PaymentProviderEventRepository events;
     private final PaymentRefundRepository refunds;
@@ -49,6 +54,7 @@ public class MercadoPagoReadinessService {
                                        PaymentSecretCrypto crypto,
                                        PaymentProviderConfigRepository providers,
                                        PaymentProviderCredentialRepository credentials,
+                                       PaymentProviderEnvironmentCheckRepository environmentChecks,
                                        PaymentRepository payments,
                                        PaymentProviderEventRepository events,
                                        PaymentRefundRepository refunds,
@@ -58,6 +64,7 @@ public class MercadoPagoReadinessService {
         this.crypto = crypto;
         this.providers = providers;
         this.credentials = credentials;
+        this.environmentChecks = environmentChecks;
         this.payments = payments;
         this.events = events;
         this.refunds = refunds;
@@ -75,10 +82,17 @@ public class MercadoPagoReadinessService {
                 MercadoPagoPaymentGateway.SANDBOX_ACCESS_TOKEN).isPresent();
         boolean sandboxWebhookSecret = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
                 MercadoPagoPaymentGateway.SANDBOX_WEBHOOK_SECRET).isPresent();
-        boolean liveAccessToken = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
-                MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN).isPresent();
+        PaymentProviderCredential liveAccessTokenCredential = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
+                MercadoPagoPaymentGateway.LIVE_ACCESS_TOKEN).orElse(null);
+        boolean liveAccessToken = liveAccessTokenCredential != null;
         boolean liveWebhookSecret = credentials.findByProviderAndCredentialName(PaymentProvider.MERCADO_PAGO,
                 MercadoPagoPaymentGateway.LIVE_WEBHOOK_SECRET).isPresent();
+        PaymentProviderEnvironmentCheck liveEnvironmentCheck = environmentChecks
+                .findByProviderAndMode(PaymentProvider.MERCADO_PAGO, PaymentProviderMode.LIVE).orElse(null);
+        boolean liveCredentialCurrent = liveEnvironmentCheck != null && liveAccessTokenCredential != null
+                && liveEnvironmentCheck.getCredentialFingerprint() != null
+                && liveEnvironmentCheck.getCredentialFingerprint().equals(liveAccessTokenCredential.getFingerprint());
+        boolean liveAccessTokenVerified = liveCredentialCurrent && liveEnvironmentCheck.isSuccess();
         String notificationUrl = configurationText(provider, "notificationUrl");
         String successUrl = configurationText(provider, "successUrl");
         String failureUrl = configurationText(provider, "failureUrl");
@@ -121,7 +135,10 @@ public class MercadoPagoReadinessService {
                 "Guardá LIVE_ACCESS_TOKEN antes de la salida a producción.", "MERCADO_PAGO"));
         checks.add(required("LIVE_WEBHOOK_SECRET", "Webhook Secret LIVE configurado", liveWebhookSecret,
                 "Guardá LIVE_WEBHOOK_SECRET antes de la salida a producción.", "MERCADO_PAGO"));
-        checks.add(required("CONNECTIVITY", "Prueba de conectividad vigente", Boolean.TRUE.equals(provider.getLastConnectivityCheckSuccess()),
+        checks.add(required("LIVE_ACCESS_TOKEN_VERIFIED", "Access Token LIVE validado sin cobro", liveAccessTokenVerified,
+                liveAccessToken ? "Ejecutá Probar LIVE; la validación es de solo lectura y no crea Orders ni cobros."
+                        : "Guardá LIVE_ACCESS_TOKEN y luego ejecutá Probar LIVE.", "MERCADO_PAGO"));
+        checks.add(configuration("CONNECTIVITY", "Prueba del modo activo vigente", Boolean.TRUE.equals(provider.getLastConnectivityCheckSuccess()), false,
                 provider.getLastConnectivityCheckMessage() == null ? "Ejecutá Probar sobre Mercado Pago después del último cambio de configuración o credenciales." : provider.getLastConnectivityCheckMessage(),
                 "MERCADO_PAGO"));
         checks.add(required("LIVE_MODE", "Proveedor en modo LIVE", provider.getMode() == PaymentProviderMode.LIVE,
@@ -175,6 +192,11 @@ public class MercadoPagoReadinessService {
                 .filter(CheckDTO::blockingForLive)
                 .filter(c -> !"DATABASE_PAYMENTS_ENABLED".equals(c.code()))
                 .allMatch(c -> "PASS".equals(c.status()));
+        Set<String> activationOnly = Set.of("LIVE_MODE", "PROVIDER_ENABLED", "DEFAULT_PROVIDER", "DATABASE_PAYMENTS_ENABLED");
+        boolean preLiveProductionReady = checks.stream()
+                .filter(CheckDTO::blockingForLive)
+                .filter(c -> !activationOnly.contains(c.code()))
+                .allMatch(c -> "PASS".equals(c.status()));
         boolean coreE2eObserved = checkoutCount > 0 && currentModeWebhookCount > 0 && fulfilledApprovedCount > 0;
         boolean extendedE2eObserved = coreE2eObserved && acceptedRefundCount > 0 && chargebackCount > 0;
         EvidenceDTO evidence = new EvidenceDTO(totalCheckoutCount, checkoutCount, processedWebhookCount,
@@ -189,8 +211,9 @@ public class MercadoPagoReadinessService {
         else if (coreE2eObserved) overallStatus = "CORE_E2E_OBSERVED_LIVE_CONFIG_PENDING";
         else overallStatus = "PREPARATION_IN_PROGRESS";
 
-        return new ReadinessDTO(overallStatus, automaticLiveReady, liveConfigurationReady, coreE2eObserved,
-                extendedE2eObserved, provider.getMode(), OffsetDateTime.now(ZoneOffset.UTC), evidence, List.copyOf(checks));
+        return new ReadinessDTO(overallStatus, automaticLiveReady, liveConfigurationReady, preLiveProductionReady,
+                liveAccessTokenVerified, coreE2eObserved, extendedE2eObserved, provider.getMode(),
+                OffsetDateTime.now(ZoneOffset.UTC), evidence, List.copyOf(checks));
     }
 
     private CheckDTO required(String code, String label, boolean pass, String failureDetail, String category) {
@@ -276,6 +299,7 @@ public class MercadoPagoReadinessService {
     }
 
     public record ReadinessDTO(String overallStatus, boolean automaticLiveReady, boolean liveConfigurationReady,
+                               boolean preLiveProductionReady, boolean liveAccessTokenVerified,
                                boolean coreE2eObserved, boolean extendedE2eObserved,
                                PaymentProviderMode mode, OffsetDateTime generatedAt,
                                EvidenceDTO evidence, List<CheckDTO> checks) {}

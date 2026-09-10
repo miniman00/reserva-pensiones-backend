@@ -257,6 +257,7 @@ public class MercadoPagoCertificationService {
         if (currentMode == PaymentProviderMode.LIVE) pre.add("Mercado Pago debe seguir en TEST/SANDBOX durante la validación previa");
         if (currentMode != run.getStartedMode()) pre.add("El modo actual debe coincidir con el modo con el que se inició la certificación");
         if (global.isPaymentsEnabled()) pre.add("Deshabilitá pagos globalmente antes de autorizar el cambio de credenciales/modo");
+        if (!ready.preLiveProductionReady()) pre.add("La preparación productiva todavía tiene controles automáticos pendientes; cargá y validá LIVE sin cambiar de SANDBOX");
         if (sandbox.checkouts() <= 0) pre.add("Falta crear un checkout de prueba en el modo inicial");
         if (sandbox.webhooks() <= 0) pre.add("Falta observar un webhook de prueba procesado");
         if (sandbox.approvedFulfilledPayments() <= 0) pre.add("Falta un pago de prueba aprobado con fulfillment aplicado");

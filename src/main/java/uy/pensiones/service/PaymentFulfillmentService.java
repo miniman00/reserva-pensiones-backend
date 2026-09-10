@@ -2,6 +2,7 @@ package uy.pensiones.service;
 
 import org.springframework.stereotype.Service;
 import uy.pensiones.enums.*;
+import uy.pensiones.mail.MailService;
 import uy.pensiones.model.*;
 import uy.pensiones.repo.AdminSubscriptionUserRepository;
 import uy.pensiones.repo.OwnerSubscriptionRepository;
@@ -21,19 +22,22 @@ public class PaymentFulfillmentService {
     private final PensionRepository pensions;
     private final SubscriptionFeaturedDayUsageRepository featuredDayUsage;
     private final OwnerTrialLifecycleService trialLifecycle;
+    private final MailService mail;
 
     public PaymentFulfillmentService(OwnerSubscriptionRepository subscriptions,
                                      AdminSubscriptionUserRepository users,
                                      PensionPromotionRepository promotions,
                                      PensionRepository pensions,
                                      SubscriptionFeaturedDayUsageRepository featuredDayUsage,
-                                     OwnerTrialLifecycleService trialLifecycle) {
+                                     OwnerTrialLifecycleService trialLifecycle,
+                                     MailService mail) {
         this.subscriptions = subscriptions;
         this.users = users;
         this.promotions = promotions;
         this.pensions = pensions;
         this.featuredDayUsage = featuredDayUsage;
         this.trialLifecycle = trialLifecycle;
+        this.mail = mail;
     }
 
     /**
@@ -97,6 +101,28 @@ public class PaymentFulfillmentService {
                 .source(SubscriptionSource.PAYMENT)
                 .build());
         trialLifecycle.consumeByPaidSubscription(user, startsAt);
+
+        String previousPlanName = active.size() == 1
+                && active.get(0).getPlanVersion() != null
+                && active.get(0).getPlanVersion().getPlan() != null
+                ? active.get(0).getPlanVersion().getPlan().getName()
+                : null;
+        Plan targetPlan = payment.getPlanVersion().getPlan();
+        mail.sendSubscriptionActivated(new MailService.SubscriptionActivatedMail(
+                user.getEmail(),
+                user.getName(),
+                targetPlan == null ? null : targetPlan.getName(),
+                previousPlanName,
+                targetPlan == null ? null : targetPlan.getDescription(),
+                subscription.getStartedAt(),
+                subscription.getExpiresAt(),
+                payment.getSubscriptionPeriodMonths(),
+                payment.getAmount(),
+                payment.getCurrency(),
+                payment.getMerchantReference(),
+                planBenefits(payment.getPlanVersion()),
+                null
+        ));
         return FulfillmentResult.success(subscription, null);
     }
 
@@ -160,6 +186,20 @@ public class PaymentFulfillmentService {
                 .source(PensionPromotionSource.PAYMENT)
                 .createdByBackoffice(null)
                 .build());
+
+        mail.sendPromotionActivated(new MailService.PromotionActivatedMail(
+                owner.getEmail(),
+                owner.getName(),
+                pension.getName(),
+                product.getName(),
+                product.getDescription(),
+                promotion.getStartsAt(),
+                promotion.getEndsAt(),
+                payment.getAmount(),
+                payment.getCurrency(),
+                payment.getMerchantReference(),
+                null
+        ));
         return FulfillmentResult.success(null, promotion);
     }
 
@@ -209,6 +249,33 @@ public class PaymentFulfillmentService {
                 subscription.setStatus(SubscriptionStatus.EXPIRED);
             }
         }
+    }
+
+    private List<String> planBenefits(PlanVersion version) {
+        if (version == null) return List.of();
+        List<String> benefits = new java.util.ArrayList<>();
+        benefits.add(limitBenefit(version.getMaxPensions(), "pensión publicada", "pensiones publicadas"));
+        benefits.add(limitBenefit(version.getMaxCollaborators(), "colaborador por pensión", "colaboradores por pensión"));
+        benefits.add(limitBenefit(version.getMaxPhotos(), "foto por pensión", "fotos por pensión"));
+        benefits.add(limitBenefit(version.getMaxVideos(), "video por pensión", "videos por pensión"));
+        if (version.getFeaturedDays() > 0) {
+            benefits.add(version.getFeaturedDays() == 1
+                    ? "1 día de destacado incluido"
+                    : version.getFeaturedDays() + " días de destacado incluidos");
+        }
+        if (version.isAdvancedAnalytics()) benefits.add("Analítica avanzada");
+        if (version.isInquiryHistory()) benefits.add("Historial avanzado de consultas");
+        if (version.isConsolidatedAnalytics()) benefits.add("Analítica consolidada");
+        if (version.isExportEnabled()) benefits.add("Exportación de datos");
+        return List.copyOf(benefits);
+    }
+
+    private String limitBenefit(Integer limit, String singular, String plural) {
+        if (limit == null) {
+            String label = plural.substring(0, 1).toUpperCase() + plural.substring(1);
+            return label + " sin límite";
+        }
+        return limit == 1 ? "1 " + singular : limit + " " + plural;
     }
 
     private boolean isMarketplaceUser(User user) {

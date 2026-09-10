@@ -158,7 +158,7 @@ public class MailOutboxService {
         JavaMailSender sender = mailSenderProvider.getIfAvailable();
         if (sender == null) return new Delivery(false, "JavaMailSender no está configurado");
         try {
-            MailAddress senderAddress = parseMailAddress(from, "CodeVaru");
+            MailAddress senderAddress = parseMailAddress(from, "Pensiones");
             MimeMessage mime = sender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mime, "UTF-8");
             if (senderAddress.name() == null || senderAddress.name().isBlank()) helper.setFrom(senderAddress.email());
@@ -177,7 +177,7 @@ public class MailOutboxService {
     private Delivery deliverBrevo(MailOutboxMessage message) {
         if (brevoApiKey == null || brevoApiKey.isBlank()) return new Delivery(false, "APP_BREVO_API_KEY está vacío");
         try {
-            MailAddress parsedFrom = parseMailAddress(from, "CodeVaru");
+            MailAddress parsedFrom = parseMailAddress(from, "Pensiones");
             BrevoEmailRequest request = new BrevoEmailRequest(
                     new BrevoMailAddress(parsedFrom.email(), parsedFrom.name()),
                     List.of(new BrevoMailAddress(message.getRecipient(), null)),
@@ -214,7 +214,7 @@ public class MailOutboxService {
 
     private MailAddress parseMailAddress(String rawValue, String defaultName) {
         String fallbackEmail = "no-reply@codevaru.com";
-        String fallbackName = defaultName == null || defaultName.isBlank() ? "CodeVaru" : defaultName.trim();
+        String fallbackName = defaultName == null || defaultName.isBlank() ? "Pensiones" : defaultName.trim();
         if (rawValue == null || rawValue.isBlank()) return new MailAddress(fallbackEmail, fallbackName);
         String value = rawValue.trim();
         int open = value.indexOf('<');

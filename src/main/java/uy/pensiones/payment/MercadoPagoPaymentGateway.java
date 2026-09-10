@@ -257,11 +257,28 @@ public class MercadoPagoPaymentGateway implements PaymentGateway {
 
     @Override
     public ConnectionTestResult testConnection() {
+        return testConnection(runtime.provider(PaymentProvider.MERCADO_PAGO).getMode());
+    }
+
+    /**
+     * Valida de forma explícita un ambiente sin cambiar el modo activo ni crear Orders/cobros.
+     * La llamada es únicamente de lectura y permite preparar LIVE mientras SANDBOX sigue operativo.
+     */
+    public ConnectionTestResult testConnection(PaymentProviderMode mode) {
+        if (mode == null || mode == PaymentProviderMode.TEST) {
+            return new ConnectionTestResult(false, "Mercado Pago solo admite prueba de credenciales SANDBOX o LIVE");
+        }
         try {
-            ProviderSettings settings = settings();
-            JsonNode response = exchange("GET", "/v1/payment_methods", settings.accessToken(), null, null);
-            if (!response.isArray()) return new ConnectionTestResult(false, "Mercado Pago respondió, pero el formato de payment_methods fue inesperado");
-            return new ConnectionTestResult(true, "Mercado Pago respondió correctamente con las credenciales configuradas");
+            String credentialName = accessTokenCredentialName(mode);
+            String accessToken = runtime.decryptedCredentials(PaymentProvider.MERCADO_PAGO).get(credentialName);
+            if (accessToken == null || accessToken.isBlank()) {
+                return new ConnectionTestResult(false, "Falta credencial " + credentialName + " de Mercado Pago");
+            }
+            JsonNode response = exchange("GET", "/v1/payment_methods", accessToken, null, null);
+            if (!response.isArray()) {
+                return new ConnectionTestResult(false, "Mercado Pago respondió, pero el formato de payment_methods fue inesperado");
+            }
+            return new ConnectionTestResult(true, "Credencial " + mode + " validada correctamente mediante una consulta de solo lectura; no se creó ningún cobro");
         } catch (Exception e) {
             return new ConnectionTestResult(false, safeMessage(e));
         }

@@ -3,6 +3,7 @@ package uy.pensiones.service;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import uy.pensiones.enums.*;
+import uy.pensiones.mail.MailService;
 import uy.pensiones.model.*;
 import uy.pensiones.repo.AdminSubscriptionUserRepository;
 import uy.pensiones.repo.OwnerSubscriptionRepository;
@@ -26,6 +27,7 @@ class PaymentFulfillmentPlanLifecycleTest {
     private PensionPromotionRepository promotions;
     private SubscriptionFeaturedDayUsageRepository featuredDayUsage;
     private PaymentFulfillmentService service;
+    private MailService mail;
 
     @BeforeEach
     void setUp() {
@@ -33,9 +35,10 @@ class PaymentFulfillmentPlanLifecycleTest {
         users = mock(AdminSubscriptionUserRepository.class);
         promotions = mock(PensionPromotionRepository.class);
         featuredDayUsage = mock(SubscriptionFeaturedDayUsageRepository.class);
+        mail = mock(MailService.class);
         when(featuredDayUsage.findBySubscription_Id(anyLong())).thenReturn(List.of());
         service = new PaymentFulfillmentService(
-                subscriptions, users, promotions, mock(PensionRepository.class), featuredDayUsage, mock(OwnerTrialLifecycleService.class));
+                subscriptions, users, promotions, mock(PensionRepository.class), featuredDayUsage, mock(OwnerTrialLifecycleService.class), mail);
     }
 
     @Test
@@ -76,6 +79,11 @@ class PaymentFulfillmentPlanLifecycleTest {
         assertEquals(71L, result.subscription().getId());
         assertEquals(SubscriptionStatus.ACTIVE, result.subscription().getStatus());
         assertEquals(22L, result.subscription().getPlanVersion().getId());
+        verify(mail).sendSubscriptionActivated(argThat(details ->
+                details != null
+                        && "Pro".equals(details.planName())
+                        && "Esencial".equals(details.previousPlanName())
+                        && details.benefits() != null));
     }
 
     @Test

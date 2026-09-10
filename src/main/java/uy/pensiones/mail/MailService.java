@@ -1,7 +1,41 @@
 package uy.pensiones.mail;
 
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.List;
+
 public interface MailService {
     record DeliveryResult(boolean sent, String message) {}
+
+    record SubscriptionActivatedMail(
+            String to,
+            String displayName,
+            String planName,
+            String previousPlanName,
+            String planDescription,
+            OffsetDateTime startsAt,
+            OffsetDateTime expiresAt,
+            Integer periodMonths,
+            BigDecimal amount,
+            String currency,
+            String paymentReference,
+            List<String> benefits,
+            String actionLink
+    ) {}
+
+    record PromotionActivatedMail(
+            String to,
+            String displayName,
+            String pensionName,
+            String promotionName,
+            String promotionDescription,
+            OffsetDateTime startsAt,
+            OffsetDateTime endsAt,
+            BigDecimal amount,
+            String currency,
+            String paymentReference,
+            String actionLink
+    ) {}
 
     void sendInvite(String to, String orgName, String link);
     void sendUserAdded(String to, String orgName);
@@ -19,6 +53,10 @@ public interface MailService {
 
     void sendOwnerAccessNotice(String to, String displayName, String title, String message, String actionLink);
 
-    DeliveryResult sendPaymentOperationalAlert(java.util.List<String> recipients, String severity, String category,
+    void sendSubscriptionActivated(SubscriptionActivatedMail details);
+
+    void sendPromotionActivated(PromotionActivatedMail details);
+
+    DeliveryResult sendPaymentOperationalAlert(List<String> recipients, String severity, String category,
                                                String title, String message, String actionPath, boolean test);
 }
